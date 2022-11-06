@@ -1,0 +1,30 @@
+{
+  "name": "wingmate",
+  "publisher": "chrismwendt",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chrismwendt/wingmate.git"
+  },
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.63.0"
+  },
+  "main": "./out/main.js",
+  "activationEvents": [
+    "onLanguage:go"
+  ],
+  "dependencies": {
+    "exec-sh": "",
+    "immutable": "",
+    "rxjs": "",
+    "ts-node-dev": "",
+    "typescript": ""
+  },
+  "devDependencies": {
+    "@tsconfig/node18": "",
+    "@types/node": "18.11.9",
+    "@types/vscode": "1.63.1",
+    "vsce": ""
+  }
+}

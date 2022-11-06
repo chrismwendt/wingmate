@@ -1,0 +1,12 @@
+{
+  "extends": "@tsconfig/node18/tsconfig.json",
+  "ts-node": {
+    "files": true
+  },
+  "compilerOptions": {
+    "outDir": "out",
+    "noEmitOnError": true,
+    "inlineSourceMap": true,
+    "inlineSources": true,
+  }
+}
