@@ -58,52 +58,58 @@ export async function activateAsync(context: vscode.ExtensionContext) {
   const editor = vscode.window.activeTextEditor
   if (editor) diagnose(editor.document)
 
-  addDisposable(
-    vscode.languages.registerHoverProvider(
-      { language: 'go' },
-      {
-        provideHover: (document, position, cancellation): vscode.ProviderResult<vscode.Hover> => {
-          const result = getSqlNodeAt(document, goParser, sqlParser, position)
-          if (!result) return { contents: ['no sqlNode'] }
-          const [stringStart, sqlNode] = result
-          return {
-            contents: [
-              new vscode.MarkdownString(
-                ancestors(sqlNode)
-                  .map(ancestor => ancestor.type)
-                  .join('.')
+  const hoverReady = false
+  if (hoverReady) {
+    addDisposable(
+      vscode.languages.registerHoverProvider(
+        { language: 'go' },
+        {
+          provideHover: (document, position, cancellation): vscode.ProviderResult<vscode.Hover> => {
+            const result = getSqlNodeAt(document, goParser, sqlParser, position)
+            if (!result) return { contents: ['no sqlNode'] }
+            const [stringStart, sqlNode] = result
+            return {
+              contents: [
+                new vscode.MarkdownString(
+                  ancestors(sqlNode)
+                    .map(ancestor => ancestor.type)
+                    .join('.')
+                ),
+              ],
+              range: new vscode.Range(
+                document.positionAt(stringStart + sqlNode.startIndex),
+                document.positionAt(stringStart + sqlNode.endIndex)
               ),
-            ],
-            range: new vscode.Range(
-              document.positionAt(stringStart + sqlNode.startIndex),
-              document.positionAt(stringStart + sqlNode.endIndex)
-            ),
-          }
-        },
-      }
+            }
+          },
+        }
+      )
     )
-  )
+  }
 
-  addDisposable(
-    vscode.languages.registerCompletionItemProvider(
-      { language: 'go' },
-      {
-        // Completion inside strings is disabled by default, need to enable it:
-        // https://github.com/microsoft/vscode/issues/23962#issuecomment-292079416
-        provideCompletionItems: (document, position, cancellation, context) => {
-          const result = getSqlNodeAt(
-            document,
-            goParser,
-            sqlParser,
-            new vscode.Position(position.line, Math.max(0, position.character - 1))
-          )
-          if (!result) return
-          const [, sqlNode] = result
-          return [new vscode.CompletionItem(sqlNode.type)]
-        },
-      }
+  const autocompleteReady = false
+  if (autocompleteReady) {
+    addDisposable(
+      vscode.languages.registerCompletionItemProvider(
+        { language: 'go' },
+        {
+          // Completion inside strings is disabled by default, need to enable it:
+          // https://github.com/microsoft/vscode/issues/23962#issuecomment-292079416
+          provideCompletionItems: (document, position, cancellation, context) => {
+            const result = getSqlNodeAt(
+              document,
+              goParser,
+              sqlParser,
+              new vscode.Position(position.line, Math.max(0, position.character - 1))
+            )
+            if (!result) return
+            const [, sqlNode] = result
+            return [new vscode.CompletionItem(sqlNode.type)]
+          },
+        }
+      )
     )
-  )
+  }
 }
 
 enum TokenType {
