@@ -1,5 +1,7 @@
 {
   "name": "wingmate",
+  "displayName": "Wingmate — SQL tools",
+  "description": "SQL syntax highlighting and syntax error detection within strings in Go code",
   "publisher": "chrismwendt",
   "repository": {
     "type": "git",
