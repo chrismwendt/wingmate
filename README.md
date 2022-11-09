@@ -1,6 +1,6 @@
 # Wingmate SQL tools
 
-Recognizes SQL within code strings and detects syntax errors:
+Recognizes SQL within code strings and does syntax highlighting and syntax error detection:
 
 ![](./images/screenshot.png)
 
