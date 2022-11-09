@@ -1,9 +1,24 @@
-import { Observable, Subject, Subscription, tap, TeardownLogic } from 'rxjs'
+import {
+  Observable,
+  finalize,
+  concatMap,
+  Subject,
+  Subscription,
+  tap,
+  TeardownLogic,
+  BehaviorSubject,
+  ReplaySubject,
+  switchMap,
+  EMPTY,
+  combineLatest,
+  map,
+} from 'rxjs'
 import Parser, { SyntaxNode } from 'web-tree-sitter'
 import * as vscode from 'vscode'
 import fs from 'fs'
 import path from 'path'
 import * as I from 'immutable'
+import { uniqBy } from 'lodash'
 
 export async function activate(context: vscode.ExtensionContext) {
   activateAsync(context).catch(e => console.error(e))
@@ -21,42 +36,87 @@ export async function activateAsync(context: vscode.ExtensionContext) {
   const sqlParser = new Parser()
   sqlParser.setLanguage(await Parser.Language.load(path.join(extensionPath, 'out/tree-sitter-sql.wasm')))
 
+  const prefixess = observeConfiguration('wingmate', 'prefixes', addDisposable).pipe(
+    map(prefixes =>
+      !Array.isArray(prefixes) ? [] : prefixes.filter((prefix): prefix is string => typeof prefix === 'string')
+    )
+  )
+
   const legend = new vscode.SemanticTokensLegend(Object.values(TokenType))
-  const provider: vscode.DocumentSemanticTokensProvider = {
-    provideDocumentSemanticTokens(document: vscode.TextDocument): vscode.ProviderResult<vscode.SemanticTokens> {
-      const tokensBuilder = new vscode.SemanticTokensBuilder(legend)
+  addDisposable(
+    prefixess
+      .pipe(
+        switchMap(prefixes => {
+          const provider: vscode.DocumentSemanticTokensProvider = {
+            provideDocumentSemanticTokens(document: vscode.TextDocument): vscode.ProviderResult<vscode.SemanticTokens> {
+              const tokensBuilder = new vscode.SemanticTokensBuilder(legend)
 
-      walkSql(document, goParser, sqlParser, (sqlNode, range) => {
-        const tokenType = nodeToTokenType(sqlNode)
-        if (tokenType) {
-          for (const lineRange of singleLineRanges(range)) tokensBuilder.push(lineRange, tokenType, [])
-          return 'bail'
-        }
-      })
+              walkSql(document, goParser, sqlParser, prefixes, (sqlNode, range) => {
+                const tokenType = nodeToTokenType(sqlNode)
+                if (tokenType) {
+                  for (const lineRange of singleLineRanges(range)) tokensBuilder.push(lineRange, tokenType, [])
+                  return 'bail'
+                }
+              })
 
-      return tokensBuilder.build()
-    },
-  }
-  addDisposable(vscode.languages.registerDocumentSemanticTokensProvider({ language: 'go' }, provider, legend))
+              return tokensBuilder.build()
+            },
+          }
+
+          return new Observable(_subscriber => {
+            const disposable = vscode.languages.registerDocumentSemanticTokensProvider(
+              { language: 'go' },
+              provider,
+              legend
+            )
+            return () => disposable.dispose()
+          })
+        })
+      )
+      .subscribe()
+  )
 
   const diagnostics = addDisposable(vscode.languages.createDiagnosticCollection('sql'))
-  const diagnose = (document: vscode.TextDocument) => {
-    const diags: vscode.Diagnostic[] = []
-    walkSql(document, goParser, sqlParser, (sqlNode, range) => {
-      if (sqlNode.type === 'ERROR') {
-        const ancestry = ancestors(sqlNode)
-          .map(ancestor => ancestor.type)
-          .join('.')
-        diags.push(new vscode.Diagnostic(range, `Syntax error in SQL at ${ancestry}`, vscode.DiagnosticSeverity.Error))
-        return 'bail'
-      }
-    })
-
-    diagnostics.set(document.uri, diags)
-  }
-  addDisposable(vscode.workspace.onDidChangeTextDocument(event => diagnose(event.document)))
-  const editor = vscode.window.activeTextEditor
-  if (editor) diagnose(editor.document)
+  addDisposable(
+    prefixess
+      .pipe(
+        switchMap(prefixes => {
+          console.log('new prefixes', prefixes.join(' '))
+          return observeChangesToDocuments(addDisposable).pipe(
+            tap(change => {
+              console.log(change.brand, change.value.uri.toString())
+              switch (change.brand) {
+                case 'added':
+                case 'modified':
+                  const diags: vscode.Diagnostic[] = []
+                  walkSql(change.value, goParser, sqlParser, prefixes, (sqlNode, range) => {
+                    if (sqlNode.type === 'ERROR') {
+                      const ancestry = ancestors(sqlNode)
+                        .map(ancestor => ancestor.type)
+                        .join('.')
+                      diags.push(
+                        new vscode.Diagnostic(
+                          range,
+                          `Syntax error in SQL at ${ancestry}`,
+                          vscode.DiagnosticSeverity.Error
+                        )
+                      )
+                      return 'bail'
+                    }
+                  })
+                  diagnostics.set(change.value.uri, diags)
+                  break
+                case 'deleted':
+                  diagnostics.set(change.value.uri, [])
+                  break
+              }
+            }),
+            finalize(() => diagnostics.clear())
+          )
+        })
+      )
+      .subscribe()
+  )
 
   const hoverReady = false
   if (hoverReady) {
@@ -163,21 +223,47 @@ const mkAddDisposable = (context: vscode.ExtensionContext) => {
   }
 }
 
-const observeVisibleTextEditors = (
-  addDisposable: <T extends vscode.Disposable>(disposable: T) => T
-): Observable<readonly vscode.TextEditor[]> => {
-  const hot = new Subject<readonly vscode.TextEditor[]>()
+type AddDisposable = <T extends TeardownLogic | vscode.Disposable>(t: T) => T
 
-  addDisposable(vscode.window.onDidChangeVisibleTextEditors(es => hot.next(es)))
+const observeVisibleTextEditors = (addDisposable: AddDisposable): BehaviorSubject<readonly vscode.TextEditor[]> => {
+  const subject = new BehaviorSubject<readonly vscode.TextEditor[]>(vscode.window.visibleTextEditors)
 
-  const cold = new Observable<readonly vscode.TextEditor[]>(subscriber => {
-    ctch(async () => {
-      subscriber.next(vscode.window.visibleTextEditors)
-      subscriber.add(hot.subscribe(subscriber))
+  addDisposable(vscode.window.onDidChangeVisibleTextEditors(es => subject.next(es)))
+
+  return subject
+}
+
+type Diff2<T> = { brand: 'added' | 'deleted'; value: T }
+type Diff3<T> = { brand: 'added' | 'modified' | 'deleted'; value: T }
+
+const observeChangesToDocuments = (addDisposable: AddDisposable): Observable<Diff3<vscode.TextDocument>> => {
+  const docs = new Map<string, vscode.TextDocument>()
+  const sub = new Subject<Diff3<vscode.TextDocument>>()
+  for (const e of vscode.window.visibleTextEditors) {
+    docs.set(e.document.uri.toString(), e.document)
+  }
+  addDisposable(
+    vscode.workspace.onDidCloseTextDocument(e => {
+      docs.delete(e.uri.toString())
+      sub.next({ brand: 'deleted', value: e })
     })
-  })
+  )
+  addDisposable(
+    vscode.workspace.onDidOpenTextDocument(e => {
+      docs.set(e.uri.toString(), e)
+      sub.next({ brand: 'added', value: e })
+    })
+  )
+  addDisposable(vscode.workspace.onDidChangeTextDocument(e => sub.next({ brand: 'modified', value: e.document })))
 
-  return cold
+  return new Observable(subscriber => {
+    console.log('new subscriber')
+    for (const doc of [...docs.values()]) {
+      console.log('new subscriber emit', doc.uri.toString())
+      subscriber.next({ brand: 'added', value: doc })
+    }
+    subscriber.add(sub.subscribe(subscriber))
+  })
 }
 
 const ctch = (f: () => Promise<any>): void => {
@@ -211,12 +297,13 @@ const walkSql = (
   document: vscode.TextDocument,
   goParser: Parser,
   sqlParser: Parser,
+  prefixes: string[],
   f: (sqlNode: SyntaxNode, range: vscode.Range) => void
 ): void => {
   const goRoot = goParser.parse(document.getText()).rootNode
 
   walk(goRoot, goNode => {
-    if (isSql(goNode)) {
+    if (isSql(document, goNode, prefixes)) {
       const str = goNode.text.slice(1, -1)
       const sqlRoot = sqlParser.parse(str).rootNode
       walk(sqlRoot, sqlNode => {
@@ -230,11 +317,10 @@ const walkSql = (
   })
 }
 
-const isSql = (node: SyntaxNode): boolean =>
-  isString(node) &&
-  node.parent?.type === 'argument_list' &&
-  node.parent.parent?.type === 'call_expression' &&
-  node.parent.parent.childForFieldName('function')!.childForFieldName('field')?.text === 'Exec'
+const isSql = (document: vscode.TextDocument, node: SyntaxNode, prefixes: string[]): boolean => {
+  const leading = document.getText(new vscode.Range(new vscode.Position(0, 0), document.positionAt(node.startIndex)))
+  return prefixes.some(prefix => leading.endsWith(prefix))
+}
 
 const ancestors = (node: SyntaxNode): SyntaxNode[] => {
   let cur: SyntaxNode | null = node
@@ -273,4 +359,18 @@ const getSqlNodeAt = (
   const indexInSql = document.offsetAt(position) - stringStart
   const sqlNode = sqlRoot.descendantForIndex(indexInSql)
   return [stringStart, sqlNode]
+}
+
+const observeConfiguration = (
+  section1: string,
+  section2: string,
+  addDisposable: AddDisposable
+): Observable<unknown> => {
+  const behaviorSubject = new BehaviorSubject(vscode.workspace.getConfiguration(section1).get(section2))
+  addDisposable(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      behaviorSubject.next(vscode.workspace.getConfiguration(section1).get(section2))
+    })
+  )
+  return behaviorSubject
 }

@@ -7,7 +7,7 @@
     "type": "git",
     "url": "https://github.com/chrismwendt/wingmate.git"
   },
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "engines": {
     "vscode": "^1.63.0"
@@ -17,6 +17,21 @@
     "onLanguage:go"
   ],
   "contributes": {
+    "configuration": {
+      "title": "Wingmate",
+      "properties": {
+        "wingmate.prefixes": {
+          "type": "array",
+          "default": [
+            "Exec(",
+            "Prepare(",
+            "Query(",
+            "/*SQL*/ "
+          ],
+          "description": "Strings to the right of any of these prefixes will be considered SQL."
+        }
+      }
+    },
     "semanticTokenScopes": [
       {
         "scopes": {
@@ -50,12 +65,14 @@
   },
   "dependencies": {
     "immutable": "",
+    "lodash": "^4.17.21",
     "rxjs": "",
     "typescript": "",
     "web-tree-sitter": "0.20.7"
   },
   "devDependencies": {
     "@tsconfig/node18": "",
+    "@types/lodash": "^4.14.188",
     "@types/node": "18.11.9",
     "@types/vscode": "1.63.1",
     "tree-sitter-cli": "0.20.7",

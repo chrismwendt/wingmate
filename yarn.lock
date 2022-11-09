@@ -7,6 +7,11 @@
   resolved "https://registry.yarnpkg.com/@tsconfig/node18/-/node18-1.0.1.tgz#ea5b375a9ead6b09ccbd70c3894ea069829ea1bb"
   integrity sha512-sNFeK6X2ATlhlvzyH4kKYQlfHXE2f2/wxtB9ClvYXevWpmwkUT7VaSrjIN9E76Qebz8qP5JOJJ9jD3QoD/Z9TA==
 
+"@types/lodash@^4.14.188":
+  version "4.14.188"
+  resolved "https://registry.yarnpkg.com/@types/lodash/-/lodash-4.14.188.tgz#e4990c4c81f7c9b00c5ff8eae389c10f27980da5"
+  integrity sha512-zmEmF5OIM3rb7SbLCFYoQhO4dGt2FRM9AMkxvA3LaADOF1n8in/zGJlWji9fmafLoNyz+FoL6FE0SLtGIArD7w==
+
 "@types/node@18.11.9":
   version "18.11.9"
   resolved "https://registry.yarnpkg.com/@types/node/-/node-18.11.9.tgz#02d013de7058cea16d36168ef2fc653464cfbad4"
@@ -383,6 +388,11 @@ linkify-it@^3.0.1:
   dependencies:
     uc.micro "^1.0.1"
 
+lodash@^4.17.21:
+  version "4.17.21"
+  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#679591c564c3bffaae8454cf0b3df370c3d6911c"
+  integrity sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==
+
 lru-cache@^6.0.0:
   version "6.0.0"
   resolved "https://registry.yarnpkg.com/lru-cache/-/lru-cache-6.0.0.tgz#6d6fe6570ebd96aaf90fcad1dafa3b2566db3a94"
@@ -444,11 +454,6 @@ mute-stream@~0.0.4:
   version "0.0.8"
   resolved "https://registry.yarnpkg.com/mute-stream/-/mute-stream-0.0.8.tgz#1630c42b2251ff81e2a283de96a5497ea92e5e0d"
   integrity sha512-nnbWWOkoWyUsTjKrhgD0dcz22mdkSnpYqbEjIm2nhwhuxlSkpywJmBo8h0ZqJdkp73mb90SssHkN4rsRaBAfAA==
-
-nan@^2.14.0, nan@^2.14.2:
-  version "2.17.0"
-  resolved "https://registry.yarnpkg.com/nan/-/nan-2.17.0.tgz#c0150a2368a182f033e9aa5195ec76ea41a199cb"
-  integrity sha512-2ZTgtl0nJsO0KQCjEpxcIr5D+Yv90plTitZt9JBfQvVJDS5seMl3FOvsh3+9CoYWXf/1l5OaZzzF6nDm4cagaQ==
 
 napi-build-utils@^1.0.1:
   version "1.0.2"
@@ -687,20 +692,6 @@ tree-sitter-cli@0.20.7:
   version "0.20.7"
   resolved "https://registry.yarnpkg.com/tree-sitter-cli/-/tree-sitter-cli-0.20.7.tgz#e3e1b5af22677e70337f5c8b201f9447fd4a144f"
   integrity sha512-MHABT8oCPr4D0fatsPo6ATQ9H4h9vHpPRjlxkxJs80tpfAEKGn6A1zU3eqfCKBcgmfZDe9CiL3rKOGMzYHwA3w==
-
-tree-sitter-go@0.19.1:
-  version "0.19.1"
-  resolved "https://registry.yarnpkg.com/tree-sitter-go/-/tree-sitter-go-0.19.1.tgz#f23c84bff882eafa296ce2d307366e76f1f83e2d"
-  integrity sha512-qAHzfuddhbs3kPIW2vMBL5TqC5umhQ3NlDBPtdqlxE6tN2PKWHj0SZxXd/YrvqNUDrMmRpPBRg9W7JyCP/+n3A==
-  dependencies:
-    nan "^2.14.0"
-
-tree-sitter-sql@0.1.0:
-  version "0.1.0"
-  resolved "https://registry.yarnpkg.com/tree-sitter-sql/-/tree-sitter-sql-0.1.0.tgz#91d747b6e6cea59c5c39116347857e3c83ed2d35"
-  integrity sha512-8RDVqEGgtVj8FRJ8WkVEzNkfSflkABHJte4KoC1Dl1DucUL7qQzvnAVKVjVW+nGFD+lOgcdl0PkN/oy0/cIbww==
-  dependencies:
-    nan "^2.14.2"
 
 tslib@^2.1.0:
   version "2.3.1"
