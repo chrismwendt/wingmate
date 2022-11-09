@@ -8,5 +8,6 @@
     "noEmitOnError": true,
     "inlineSourceMap": true,
     "inlineSources": true,
+    "esModuleInterop": true,
   }
 }

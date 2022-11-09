@@ -14,17 +14,49 @@
   "activationEvents": [
     "onLanguage:go"
   ],
+  "contributes": {
+    "semanticTokenScopes": [
+      {
+        "scopes": {
+          "sqlkeyword": [
+            "keyword.other.DML.sql"
+          ],
+          "sqlstring": [
+            "string.quoted.single.sql"
+          ],
+          "sqlnumber": [
+            "constant.numeric.sql"
+          ],
+          "sqlasterisk": [
+            "keyword.operator.star.sql"
+          ],
+          "sqlcomment": [
+            "comment.line.double-dash.sql"
+          ],
+          "sqlidentifier": [
+            "entity.name.function.sql"
+          ],
+          "sqloperator": [
+            "keyword.operator.comparison.sql"
+          ],
+          "sqlwhitespace": [
+            "punctuation.whitespace.comment.leading.sql"
+          ]
+        }
+      }
+    ]
+  },
   "dependencies": {
-    "exec-sh": "",
     "immutable": "",
     "rxjs": "",
-    "ts-node-dev": "",
-    "typescript": ""
+    "typescript": "",
+    "web-tree-sitter": "0.20.7"
   },
   "devDependencies": {
     "@tsconfig/node18": "",
     "@types/node": "18.11.9",
     "@types/vscode": "1.63.1",
+    "tree-sitter-cli": "0.20.7",
     "vsce": ""
   }
 }
