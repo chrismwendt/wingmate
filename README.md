@@ -1,13 +1,8 @@
-# Wingmate
+# Wingmate SQL tools
 
-Will recognize SQL code within strings:
+Recognizes SQL within code strings and detects syntax errors:
 
-- Syntax highlighting
-- Autocomplete
-- Syntax errors
-- Linting
-- Hover tooltips
-- DB connection
+![](./images/screenshot.png)
 
 Free for non-commercial use.
 
