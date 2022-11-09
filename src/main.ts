@@ -1,27 +1,10 @@
-import {
-  Observable,
-  finalize,
-  concatMap,
-  Subject,
-  Subscription,
-  tap,
-  TeardownLogic,
-  BehaviorSubject,
-  ReplaySubject,
-  switchMap,
-  EMPTY,
-  combineLatest,
-  map,
-} from 'rxjs'
+import { Observable, finalize, Subject, Subscription, tap, TeardownLogic, BehaviorSubject, switchMap, map } from 'rxjs'
 import Parser, { SyntaxNode } from 'web-tree-sitter'
 import * as vscode from 'vscode'
-import fs from 'fs'
 import path from 'path'
-import * as I from 'immutable'
-import { uniqBy } from 'lodash'
 
 export async function activate(context: vscode.ExtensionContext) {
-  activateAsync(context).catch(e => console.error(e))
+  await activateAsync(context).catch(e => console.error(e))
 }
 
 export async function activateAsync(context: vscode.ExtensionContext) {
@@ -63,13 +46,15 @@ export async function activateAsync(context: vscode.ExtensionContext) {
             },
           }
 
-          return new Observable(_subscriber => {
+          return new Observable(() => {
             const disposable = vscode.languages.registerDocumentSemanticTokensProvider(
               { language: 'go' },
               provider,
               legend
             )
-            return () => disposable.dispose()
+            return () => {
+              disposable.dispose()
+            }
           })
         })
       )
@@ -85,10 +70,10 @@ export async function activateAsync(context: vscode.ExtensionContext) {
           return observeChangesToDocuments(addDisposable).pipe(
             tap(change => {
               console.log(change.brand, change.value.uri.toString())
+              const diags: vscode.Diagnostic[] = []
               switch (change.brand) {
                 case 'added':
                 case 'modified':
-                  const diags: vscode.Diagnostic[] = []
                   walkSql(change.value, goParser, sqlParser, prefixes, (sqlNode, range) => {
                     if (sqlNode.type === 'ERROR') {
                       const ancestry = ancestors(sqlNode)
@@ -195,7 +180,7 @@ const nodeToTokenType = (node: SyntaxNode): TokenType | undefined => {
 }
 
 const walk = (root: SyntaxNode, f: (node: SyntaxNode) => 'bail' | void, debugLabel?: string): void => {
-  const recur = (node?: SyntaxNode, depth: number = 0): void => {
+  const recur = (node?: SyntaxNode, depth = 0): void => {
     if (!node) return
     if (debugLabel) console.log(`${debugLabel}:`, '  '.repeat(depth), JSON.stringify(node.text), `(${node.type})`)
     const behavior = f(node)
@@ -206,9 +191,6 @@ const walk = (root: SyntaxNode, f: (node: SyntaxNode) => 'bail' | void, debugLab
   }
   recur(root)
 }
-
-const rangeToString = (range: vscode.Range): string =>
-  `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`
 
 const nodeToRange = (node: SyntaxNode): vscode.Range =>
   new vscode.Range(node.startPosition.row, node.startPosition.column, node.endPosition.row, node.endPosition.column)
@@ -225,15 +207,6 @@ const mkAddDisposable = (context: vscode.ExtensionContext) => {
 
 type AddDisposable = <T extends TeardownLogic | vscode.Disposable>(t: T) => T
 
-const observeVisibleTextEditors = (addDisposable: AddDisposable): BehaviorSubject<readonly vscode.TextEditor[]> => {
-  const subject = new BehaviorSubject<readonly vscode.TextEditor[]>(vscode.window.visibleTextEditors)
-
-  addDisposable(vscode.window.onDidChangeVisibleTextEditors(es => subject.next(es)))
-
-  return subject
-}
-
-type Diff2<T> = { brand: 'added' | 'deleted'; value: T }
 type Diff3<T> = { brand: 'added' | 'modified' | 'deleted'; value: T }
 
 const observeChangesToDocuments = (addDisposable: AddDisposable): Observable<Diff3<vscode.TextDocument>> => {
@@ -263,18 +236,6 @@ const observeChangesToDocuments = (addDisposable: AddDisposable): Observable<Dif
       subscriber.next({ brand: 'added', value: doc })
     }
     subscriber.add(sub.subscribe(subscriber))
-  })
-}
-
-const ctch = (f: () => Promise<any>): void => {
-  f().catch(async e => {
-    if (typeof e === 'string') {
-      await vscode.window.showErrorMessage(e)
-    } else if (e instanceof Error) {
-      await vscode.window.showErrorMessage(e.toString())
-    } else {
-      await vscode.window.showErrorMessage('Unknown error')
-    }
   })
 }
 
@@ -368,7 +329,7 @@ const observeConfiguration = (
 ): Observable<unknown> => {
   const behaviorSubject = new BehaviorSubject(vscode.workspace.getConfiguration(section1).get(section2))
   addDisposable(
-    vscode.workspace.onDidChangeConfiguration(e => {
+    vscode.workspace.onDidChangeConfiguration(() => {
       behaviorSubject.next(vscode.workspace.getConfiguration(section1).get(section2))
     })
   )
