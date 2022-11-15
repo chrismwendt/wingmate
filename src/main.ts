@@ -66,14 +66,13 @@ export async function activateAsync(context: vscode.ExtensionContext) {
     prefixess
       .pipe(
         switchMap(prefixes => {
-          console.log('new prefixes', prefixes.join(' '))
           return observeChangesToDocuments(addDisposable).pipe(
             tap(change => {
-              console.log(change.brand, change.value.uri.toString())
               const diags: vscode.Diagnostic[] = []
               switch (change.brand) {
                 case 'added':
                 case 'modified':
+                  if (change.value.languageId !== 'go') break
                   walkSql(change.value, goParser, sqlParser, prefixes, (sqlNode, range) => {
                     if (sqlNode.type === 'ERROR') {
                       const ancestry = ancestors(sqlNode)
@@ -103,7 +102,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       .subscribe()
   )
 
-  const hoverReady = false
+  const hoverReady = true
   if (hoverReady) {
     addDisposable(
       vscode.languages.registerHoverProvider(
@@ -230,9 +229,7 @@ const observeChangesToDocuments = (addDisposable: AddDisposable): Observable<Dif
   addDisposable(vscode.workspace.onDidChangeTextDocument(e => sub.next({ brand: 'modified', value: e.document })))
 
   return new Observable(subscriber => {
-    console.log('new subscriber')
     for (const doc of [...docs.values()]) {
-      console.log('new subscriber emit', doc.uri.toString())
       subscriber.next({ brand: 'added', value: doc })
     }
     subscriber.add(sub.subscribe(subscriber))
@@ -265,6 +262,8 @@ const walkSql = (
 
   walk(goRoot, goNode => {
     if (isSql(document, goNode, prefixes)) {
+      console.log('🟠', goNode.startPosition, goNode.endPosition, document.getText(nodeToRange(goNode)))
+
       const str = goNode.text.slice(1, -1)
       const sqlRoot = sqlParser.parse(str).rootNode
       walk(sqlRoot, sqlNode => {
@@ -279,6 +278,7 @@ const walkSql = (
 }
 
 const isSql = (document: vscode.TextDocument, node: SyntaxNode, prefixes: string[]): boolean => {
+  if (!isString(node)) return false
   const leading = document.getText(new vscode.Range(new vscode.Position(0, 0), document.positionAt(node.startIndex)))
   return prefixes.some(prefix => leading.endsWith(prefix))
 }
