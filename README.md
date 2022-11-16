@@ -18,6 +18,18 @@ gopls's semantic highlighting prevents SQL syntax highlighting from working. You
 }
 ```
 
+Some themes don't support semantic highlighting and you need to force it:
+
+```json
+{
+  "editor.semanticTokenColorCustomizations": {
+    "[Gatito Theme]": {
+      "enabled": true
+    }
+  }
+}
+```
+
 To get autocomplete in strings, you need to enable it:
 
 ```json
