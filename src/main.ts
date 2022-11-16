@@ -262,8 +262,6 @@ const walkSql = (
 
   walk(goRoot, goNode => {
     if (isSql(document, goNode, prefixes)) {
-      console.log('🟠', goNode.startPosition, goNode.endPosition, document.getText(nodeToRange(goNode)))
-
       const str = goNode.text.slice(1, -1)
       const sqlRoot = sqlParser.parse(str).rootNode
       walk(sqlRoot, sqlNode => {
