@@ -4,6 +4,8 @@ Recognizes SQL within code strings using [tree-sitter](https://tree-sitter.githu
 
 ![](./images/screenshot.png)
 
+![](./images/completions.png)
+
 Free for non-commercial use.
 
 You need a [subscription](https://buy.stripe.com/fZeaEG6em0Bx6LmbII) for commercial use.
@@ -35,6 +37,14 @@ To get autocomplete in strings, you need to enable it:
 ```json
 {
   "editor.quickSuggestions.strings": true
+}
+```
+
+To get column name completions, set your database connection:
+
+```json
+{
+  "wingmate.conn": "postgresql://localhost:5432/postgres"
 }
 ```
 

@@ -1,7 +1,20 @@
-import { Observable, finalize, Subject, Subscription, tap, TeardownLogic, BehaviorSubject, switchMap, map } from 'rxjs'
+import {
+  Observable,
+  finalize,
+  Subject,
+  Subscription,
+  tap,
+  TeardownLogic,
+  BehaviorSubject,
+  switchMap,
+  map,
+  skip,
+  skipWhile,
+} from 'rxjs'
 import Parser, { SyntaxNode } from 'web-tree-sitter'
 import * as vscode from 'vscode'
 import path from 'path'
+import { Client } from 'pg'
 
 export async function activate(context: vscode.ExtensionContext) {
   await activateAsync(context).catch(e => console.error(e))
@@ -19,11 +32,10 @@ export async function activateAsync(context: vscode.ExtensionContext) {
   const sqlParser = new Parser()
   sqlParser.setLanguage(await Parser.Language.load(path.join(extensionPath, 'out/tree-sitter-sql.wasm')))
 
-  const prefixess = observeConfiguration('wingmate', 'prefixes', addDisposable).pipe(
-    map(prefixes =>
-      !Array.isArray(prefixes) ? [] : prefixes.filter((prefix): prefix is string => typeof prefix === 'string')
-    )
-  )
+  const mapPrefixes = (prefixes: unknown): string[] =>
+    !Array.isArray(prefixes) ? [] : prefixes.filter((prefix): prefix is string => typeof prefix === 'string')
+
+  const prefixess = observeConfiguration('wingmate', 'prefixes', addDisposable, mapPrefixes)
 
   const legend = new vscode.SemanticTokensLegend(Object.values(TokenType))
   addDisposable(
@@ -102,36 +114,119 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       .subscribe()
   )
 
-  const hoverReady = true
-  if (hoverReady) {
-    addDisposable(
-      vscode.languages.registerHoverProvider(
-        { language: 'go' },
-        {
-          provideHover: (document, position, cancellation): vscode.ProviderResult<vscode.Hover> => {
-            const result = getSqlNodeAt(document, goParser, sqlParser, position)
-            if (!result) return { contents: ['no sqlNode'] }
-            const [stringStart, sqlNode] = result
-            return {
-              contents: [
-                new vscode.MarkdownString(
-                  ancestors(sqlNode)
-                    .map(ancestor => ancestor.type)
-                    .join('.')
-                ),
-              ],
-              range: new vscode.Range(
-                document.positionAt(stringStart + sqlNode.startIndex),
-                document.positionAt(stringStart + sqlNode.endIndex)
+  addDisposable(
+    vscode.languages.registerHoverProvider(
+      { language: 'go' },
+      {
+        provideHover: (document, position, cancellation): vscode.ProviderResult<vscode.Hover> => {
+          const result = getSqlNodeAt(document, goParser, sqlParser, position, prefixess.value)
+          if (!result) return
+          const [stringStart, sqlNode] = result
+          return {
+            contents: [
+              new vscode.MarkdownString(
+                ancestors(sqlNode)
+                  .map(ancestor => ancestor.type)
+                  .join('.')
               ),
-            }
-          },
-        }
-      )
+            ],
+            range: new vscode.Range(
+              document.positionAt(stringStart + sqlNode.startIndex),
+              document.positionAt(stringStart + sqlNode.endIndex)
+            ),
+          }
+        },
+      }
     )
+  )
+
+  addDisposable(
+    vscode.languages.registerDefinitionProvider(
+      { language: 'go' },
+      {
+        provideDefinition: (document, position, cancellation): vscode.ProviderResult<vscode.Definition> => {
+          const result = getSqlNodeAt(document, goParser, sqlParser, position, prefixess.value)
+          if (!result) return
+          const [stringStart, sqlNode] = result
+          if (sqlNode.type !== 'identifier') return
+          for (let node: SyntaxNode | null = sqlNode; node !== null; node = node.parent) {
+            if (node.type !== 'statement') continue
+            for (const cte of node.namedChildren.filter(n => n.type === 'cte')) {
+              const identifier = cte.namedChildren.find(n => n.type === 'identifier')
+              if (!identifier) continue
+              if (identifier.text === sqlNode.text)
+                return {
+                  uri: document.uri,
+                  range: new vscode.Range(
+                    document.positionAt(stringStart + identifier.startIndex),
+                    document.positionAt(stringStart + identifier.endIndex)
+                  ),
+                }
+            }
+          }
+        },
+      }
+    )
+  )
+
+  const findRefs = (
+    document: vscode.TextDocument,
+    position: vscode.Position
+  ): vscode.ProviderResult<vscode.Location[]> => {
+    const result = getSqlNodeAt(document, goParser, sqlParser, position, prefixess.value)
+    if (!result) return
+    const [stringStart, sqlNode] = result
+    if (sqlNode.type !== 'identifier') return
+    let root = sqlNode
+    while (root.parent) root = root.parent
+    const locs: vscode.Location[] = []
+    walk(root, node => {
+      if (node.type !== 'identifier') return
+      if (node.text !== sqlNode.text) return
+      locs.push(
+        new vscode.Location(
+          document.uri,
+          new vscode.Range(
+            document.positionAt(stringStart + node.startIndex),
+            document.positionAt(stringStart + node.endIndex)
+          )
+        )
+      )
+    })
+    return locs
   }
 
-  const autocompleteReady = false
+  addDisposable(vscode.languages.registerReferenceProvider({ language: 'go' }, { provideReferences: findRefs }))
+
+  addDisposable(
+    vscode.languages.registerDocumentHighlightProvider({ language: 'go' }, { provideDocumentHighlights: findRefs })
+  )
+
+  const conns = observeConfiguration('wingmate', 'conn', addDisposable, (conn: unknown): string | undefined =>
+    typeof conn === 'string' ? conn : undefined
+  )
+
+  addDisposable(
+    conns
+      .pipe(
+        skip(1),
+        // skipWhile(conn => conn?.includes('localhost:5432'))
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
+        tap(async conn => {
+          try {
+            const client = new Client(conn)
+            await client.connect()
+            await vscode.window.showInformationMessage('Connected to postgres ✅')
+          } catch (e) {
+            if (e instanceof Error) await vscode.window.showErrorMessage(`Failed to connect to postgres: ${e.message}`)
+            else await vscode.window.showErrorMessage('Failed to connect to postgres')
+          }
+        })
+      )
+      .subscribe()
+  )
+
+  const autocompleteReady = true
   if (autocompleteReady) {
     addDisposable(
       vscode.languages.registerCompletionItemProvider(
@@ -139,16 +234,36 @@ export async function activateAsync(context: vscode.ExtensionContext) {
         {
           // Completion inside strings is disabled by default, need to enable it:
           // https://github.com/microsoft/vscode/issues/23962#issuecomment-292079416
-          provideCompletionItems: (document, position, cancellation, context) => {
+          provideCompletionItems: async (document, position, cancellation, context) => {
             const result = getSqlNodeAt(
               document,
               goParser,
               sqlParser,
-              new vscode.Position(position.line, Math.max(0, position.character - 1))
+              new vscode.Position(position.line, Math.max(0, position.character - 1)),
+              prefixess.value
             )
             if (!result) return
-            const [, sqlNode] = result
-            return [new vscode.CompletionItem(sqlNode.type)]
+
+            const conn = conns.value
+            if (!conn) return
+            const client = new Client(conn)
+            try {
+              await client.connect()
+            } catch (e) {
+              // don't spam
+              return
+            }
+            const res = await client.query<{ table_name: string; column_name: string; data_type: string }>(
+              "select table_name, column_name, data_type from information_schema.columns where table_schema = 'public' group by table_name, column_name, data_type"
+            )
+            const ret = res.rows.map(row => {
+              const i = new vscode.CompletionItem(row.column_name)
+              i.detail = `${row.table_name} ${row.data_type.toUpperCase()}`
+              i.documentation = `From table ${row.table_name}`
+              return i
+            })
+            await client.end()
+            return ret
           },
         }
       )
@@ -303,13 +418,15 @@ const getSqlNodeAt = (
   document: vscode.TextDocument,
   goParser: Parser,
   sqlParser: Parser,
-  position: vscode.Position
+  position: vscode.Position,
+  prefixes: string[]
 ): [number, SyntaxNode] | undefined => {
   const goRoot = goParser.parse(document.getText()).rootNode
   const node = goRoot.descendantForPosition(positionToPoint(position))
   if (!node) return
   const string = ancestors(node).reverse().filter(isString)[0]
   if (!string) return
+  if (!isSql(document, string, prefixes)) return
   if (document.offsetAt(position) === string.startIndex) return
   if (document.offsetAt(position) === string.endIndex - 1) return
   const str = string.text.slice(1, -1)
@@ -320,15 +437,16 @@ const getSqlNodeAt = (
   return [stringStart, sqlNode]
 }
 
-const observeConfiguration = (
+const observeConfiguration = <T>(
   section1: string,
   section2: string,
-  addDisposable: AddDisposable
-): Observable<unknown> => {
-  const behaviorSubject = new BehaviorSubject(vscode.workspace.getConfiguration(section1).get(section2))
+  addDisposable: AddDisposable,
+  mapFn: (arg: unknown) => T
+): BehaviorSubject<T> => {
+  const behaviorSubject = new BehaviorSubject(mapFn(vscode.workspace.getConfiguration(section1).get(section2)))
   addDisposable(
     vscode.workspace.onDidChangeConfiguration(() => {
-      behaviorSubject.next(vscode.workspace.getConfiguration(section1).get(section2))
+      behaviorSubject.next(mapFn(vscode.workspace.getConfiguration(section1).get(section2)))
     })
   )
   return behaviorSubject

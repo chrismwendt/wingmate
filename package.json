@@ -7,7 +7,7 @@
     "type": "git",
     "url": "https://github.com/chrismwendt/wingmate.git"
   },
-  "version": "1.0.3",
+  "version": "1.0.9",
   "private": true,
   "engines": {
     "vscode": "^1.63.0"
@@ -29,6 +29,11 @@
             "/*SQL*/ "
           ],
           "description": "Strings to the right of any of these prefixes will be considered SQL."
+        },
+        "wingmate.conn": {
+          "type": "string",
+          "default": "postgresql://localhost:5432/postgres",
+          "description": "Postgres connection string."
         }
       }
     },
@@ -66,6 +71,7 @@
   "dependencies": {
     "immutable": "",
     "lodash": "^4.17.21",
+    "pg": "^8.8.0",
     "rxjs": "",
     "typescript": "^4.8.4",
     "web-tree-sitter": "0.20.7"
@@ -74,6 +80,7 @@
     "@tsconfig/node18": "",
     "@types/lodash": "^4.14.188",
     "@types/node": "18.11.9",
+    "@types/pg": "^8.6.5",
     "@types/vscode": "1.63.1",
     "@typescript-eslint/eslint-plugin": "^5.42.1",
     "@typescript-eslint/parser": "^5.42.1",
