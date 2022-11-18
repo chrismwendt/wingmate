@@ -177,8 +177,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
     if (!result) return
     const [stringStart, sqlNode] = result
     if (sqlNode.type !== 'identifier') return
-    let root = sqlNode
-    while (root.parent) root = root.parent
+    const root = getRoot(sqlNode)
     const locs: vscode.Location[] = []
     walk(root, node => {
       if (node.type !== 'identifier') return
@@ -253,13 +252,57 @@ export async function activateAsync(context: vscode.ExtensionContext) {
               // don't spam
               return
             }
-            const res = await client.query<{ table_name: string; column_name: string; data_type: string }>(
-              "select table_name, column_name, data_type from information_schema.columns where table_schema = 'public' group by table_name, column_name, data_type"
+
+            const [stringStart, sqlNode] = result
+
+            const res = await client.query<{
+              table_name: string
+              column_name: string
+              data_type: string
+              column_default: string | null
+              is_nullable: 'YES' | 'NO'
+            }>(
+              "select table_name, column_name, data_type, column_default, is_nullable from information_schema.columns where table_schema = 'public' group by table_name, column_name, data_type, column_default, is_nullable;"
             )
+
+            const aliasSuggestion = ((): { suggestion: string; offset: number } | undefined => {
+              if (sqlNode.type !== 'identifier') return
+              const parent = sqlNode.parent
+              if (!parent) return
+              const alias = parent.childForFieldName('table_alias')
+              if (!alias) return
+              const select = ancestors(sqlNode)
+                .reverse()
+                .find(n => n.type === 'select')
+              if (!select) return
+              let from: SyntaxNode | undefined = undefined
+              for (let n: SyntaxNode | null = select; n; n = n?.nextNamedSibling) {
+                if (n?.type === 'from') from = n
+              }
+              if (from) return
+              return { suggestion: alias.text, offset: select.endIndex }
+            })()
+
             const ret = res.rows.map(row => {
-              const i = new vscode.CompletionItem(row.column_name)
-              i.detail = `${row.table_name} ${row.data_type.toUpperCase()}`
-              i.documentation = `From table ${row.table_name}`
+              // const i = new vscode.CompletionItem(row.column_name)
+              const i = new vscode.CompletionItem({
+                label: row.column_name,
+                description: row.table_name,
+                detail:
+                  ' ' +
+                  row.data_type.toUpperCase() +
+                  (row.is_nullable === 'NO' ? ' NOT NULLABLE' : '') +
+                  (row.column_default !== null ? ' DEFAULT ' + row.column_default : ''),
+              })
+              if (aliasSuggestion) {
+                i.additionalTextEdits = [
+                  vscode.TextEdit.insert(
+                    document.positionAt(stringStart + aliasSuggestion.offset),
+                    ` FROM ${row.table_name} ${aliasSuggestion.suggestion}`
+                  ),
+                ]
+              }
+
               return i
             })
             await client.end()
@@ -396,6 +439,7 @@ const isSql = (document: vscode.TextDocument, node: SyntaxNode, prefixes: string
   return prefixes.some(prefix => leading.endsWith(prefix))
 }
 
+/** Returns [program, statement, ..., identifier] */
 const ancestors = (node: SyntaxNode): SyntaxNode[] => {
   let cur: SyntaxNode | null = node
   const ans: SyntaxNode[] = []
@@ -450,4 +494,10 @@ const observeConfiguration = <T>(
     })
   )
   return behaviorSubject
+}
+
+const getRoot = (node: SyntaxNode): SyntaxNode => {
+  let n = node
+  while (n.parent) n = n.parent
+  return n
 }
