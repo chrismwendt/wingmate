@@ -225,6 +225,12 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       .subscribe()
   )
 
+  addDisposable(
+    vscode.commands.registerTextEditorCommand('wingmate.complete', (editor, edit, offset: number, value: string) => {
+      edit.insert(editor.document.positionAt(offset), value)
+    })
+  )
+
   const autocompleteReady = true
   if (autocompleteReady) {
     addDisposable(
@@ -265,12 +271,11 @@ export async function activateAsync(context: vscode.ExtensionContext) {
               "select table_name, column_name, data_type, column_default, is_nullable from information_schema.columns where table_schema = 'public' group by table_name, column_name, data_type, column_default, is_nullable;"
             )
 
-            const aliasSuggestion = ((): { suggestion: string; offset: number } | undefined => {
+            const suggestion = ((): { alias: string | undefined; identLen: number; fromOffset: number } | undefined => {
               if (sqlNode.type !== 'identifier') return
               const parent = sqlNode.parent
               if (!parent) return
               const alias = parent.childForFieldName('table_alias')
-              if (!alias) return
               const select = ancestors(sqlNode)
                 .reverse()
                 .find(n => n.type === 'select')
@@ -280,12 +285,15 @@ export async function activateAsync(context: vscode.ExtensionContext) {
                 if (n?.type === 'from') from = n
               }
               if (from) return
-              return { suggestion: alias.text, offset: select.endIndex }
+              return {
+                alias: alias?.text,
+                identLen: sqlNode.text.length,
+                fromOffset: select.endIndex,
+              }
             })()
 
             const ret = res.rows.map(row => {
-              // const i = new vscode.CompletionItem(row.column_name)
-              const i = new vscode.CompletionItem({
+              const completion = new vscode.CompletionItem({
                 label: row.column_name,
                 description: row.table_name,
                 detail:
@@ -294,16 +302,18 @@ export async function activateAsync(context: vscode.ExtensionContext) {
                   (row.is_nullable === 'NO' ? ' NOT NULLABLE' : '') +
                   (row.column_default !== null ? ' DEFAULT ' + row.column_default : ''),
               })
-              if (aliasSuggestion) {
-                i.additionalTextEdits = [
-                  vscode.TextEdit.insert(
-                    document.positionAt(stringStart + aliasSuggestion.offset),
-                    ` FROM ${row.table_name} ${aliasSuggestion.suggestion}`
-                  ),
-                ]
+              if (suggestion) {
+                completion.command = {
+                  title: 'title',
+                  command: 'wingmate.complete',
+                  arguments: [
+                    stringStart + suggestion.fromOffset + (row.column_name.length - suggestion.identLen),
+                    ` FROM ${row.table_name}${suggestion.alias ? ` ${suggestion.alias}` : ''}`,
+                  ],
+                }
               }
 
-              return i
+              return completion
             })
             await client.end()
             return ret
