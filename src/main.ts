@@ -284,7 +284,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
               for (let n: SyntaxNode | null = select; n; n = n?.nextNamedSibling) {
                 if (n?.type === 'from') from = n
               }
-              if (from) return
+              if (from && from.namedChildren.some(n => n.type === 'from_clause')) return
               return {
                 alias: alias?.text,
                 identLen: sqlNode.text.length,

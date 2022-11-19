@@ -6,7 +6,7 @@
       "type": "extensionHost",
       "request": "launch",
       "args": [
-        "${userHome}/Downloads/wingmate-sandbox",
+        "${workspaceFolder}/sandbox",
         "--extensionDevelopmentPath=${workspaceFolder}",
       ],
       "preLaunchTask": "build"
