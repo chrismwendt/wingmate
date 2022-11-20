@@ -19,7 +19,7 @@ You need a [subscription](https://buy.stripe.com/fZeaEG6em0Bx6LmbII) for commerc
 
 ## Configuration
 
-gopls's semantic highlighting prevents SQL syntax highlighting from working. You can disable it with this setting:
+gopls's semantic highlighting prevents SQL syntax highlighting from working. You can disable it with this user setting (hit <kbd>Cmd+comma</kbd> then click the file icon in the top-right):
 
 ```json
 {
