@@ -22,6 +22,7 @@ import Parser, { SyntaxNode } from 'web-tree-sitter'
 import * as vscode from 'vscode'
 import path from 'path'
 import { Client, Connection } from 'pg'
+import _ from 'lodash'
 
 export async function activate(context: vscode.ExtensionContext) {
   await activateAsync(context).catch(e => console.error(e))
@@ -146,19 +147,54 @@ export async function activateAsync(context: vscode.ExtensionContext) {
           if (sqlNode.type !== 'identifier') return
           if (!schemas.value)
             return new vscode.Hover('Wingmate is not connected to a DB. Try changing wingmate.conn in your settings.')
+          const ident = sqlNode.text
+          const range = new vscode.Range(
+            document.positionAt(stringStart + sqlNode.startIndex),
+            document.positionAt(stringStart + sqlNode.endIndex)
+          )
+
+          const tableDefs = _.chain(schemas.value)
+            .groupBy(column => column.table_name)
+            .entries()
+            .filter(([table, columns]) => table === ident || columns.some(column => column.column_name === ident))
+            .map(([table, columns]) => {
+              const tableName = table === ident ? `**${table}**` : table
+              return (
+                `Table ${tableName}:\n\n` +
+                '| Column | Type |\n' +
+                '| --- | --- |\n' +
+                _.sortBy(columns, c => c.column_name)
+                  .map(c => {
+                    const name = c.column_name === ident ? `**${c.column_name}**` : c.column_name
+                    return `| ${name} | \`${prettyColumnType(c)}\` |`
+                  })
+                  .join('\n')
+              )
+            })
+            .join('\n\n---\n\n')
+            .value()
+
+          const columnMatches = schemas.value.filter(c => c.column_name === ident)
+          const summary =
+            columnMatches.length > 1
+              ? `Matches for **${ident}**:\n\n${columnMatches
+                  .map(c => `- ${c.table_name}.**${c.column_name}** \`${prettyColumnType(c)}\``)
+                  .join('\n')}`
+              : columnMatches.length > 0
+              ? `**${ident}** ${prettyColumnType(columnMatches[0])}`
+              : ''
+
           return {
             contents: [
               new vscode.MarkdownString(
-                schemas.value
-                  .filter(column => column.column_name.toLowerCase() === sqlNode.text.toLowerCase())
-                  .map(column => `- ${prettyColumn(column)}`)
-                  .join('\n')
+                tableDefs
+                  ? _.compact([summary, tableDefs]).join('\n\n---\n\n')
+                  : `**${ident}** not found. Checked ${
+                      _.uniq(schemas.value.map(c => c.table_name)).length
+                    } tables and ${schemas.value.length} columns. Try running the command "Wingmate: Refresh Schema".`
               ),
             ],
-            range: new vscode.Range(
-              document.positionAt(stringStart + sqlNode.startIndex),
-              document.positionAt(stringStart + sqlNode.endIndex)
-            ),
+            range,
           }
         },
       }
@@ -653,8 +689,10 @@ const getSchema = async (client: Client): Promise<Column[] | undefined> =>
 //     )
 // }
 
-const prettyColumn = (column: Column): string =>
+const prettyFullColumn = (column: Column): string =>
   `${column.table_name}.${column.column_name} ${prettyColumnType(column)}`
+
+const prettyColumn = (column: Column): string => `${column.column_name} ${prettyColumnType(column)}`
 
 const prettyColumnType = (column: Column): string => {
   let str = ''
