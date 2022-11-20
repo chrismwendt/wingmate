@@ -637,16 +637,91 @@ type Sink = { fn: string; arg: number }
 
 const j2d = (node: SyntaxNode): SyntaxNode | undefined => {
   if (node.type !== 'identifier') return
-  for (const top of getRoot(node).namedChildren) {
-    if (top.type !== 'const_declaration') continue
-    const const_spec = top.namedChildren[0]
-    if (const_spec?.type !== 'const_spec') continue
-    if (const_spec.childForFieldName('name')?.text !== node.text) continue
-    const str = const_spec.childForFieldName('value')?.namedChildren[0]
-    if (!str || !isString(str)) continue
-    return str
+  const ident = node.text
+  for (const ancestor of ancestors(node).reverse()) {
+    for (const child of ancestor.namedChildren) {
+      if (child.type === 'const_declaration') {
+        const str = new Selection(child)
+          .namedChild(0)
+          .type('const_spec')
+          .has(s => s.field('name') .text(ident))
+          .field('value')
+          .namedChild(0)
+          .filter(isString)
+          .getFirst()
+        if (!str) continue
+        return str
+      } else if (child.type === 'short_var_declaration') {
+        const index = new Selection(child)
+          .field('left')
+          .type('expression_list')
+          .namedChildren()
+          .text(ident)
+          .firstNamedIndex()
+        if (index === undefined) continue
+        const str = new Selection(child)
+          .field('right')
+          .type('expression_list')
+          .namedChild(index)
+          .filter(isString)
+          .getFirst()
+        if (!str) continue
+        return str
+      }
+    }
   }
 }
+
+class Selection {
+  nodes: SyntaxNode[] = []
+  constructor(node: SyntaxNode) {
+    this.nodes = [node]
+  }
+  flatMap(f: (node: SyntaxNode) => SyntaxNode[]): Selection {
+    this.nodes = this.nodes.flatMap(node => f(node))
+    return this
+  }
+  flatMapNullable(f: (node: SyntaxNode) => Nullable<SyntaxNode>): Selection {
+    return this.flatMap(node => nullableToArray(f(node)))
+  }
+  filter(f: (node: SyntaxNode) => boolean): Selection {
+    return this.flatMap(node => toArrayIf(node, f(node)))
+  }
+  field(f: string): Selection {
+    return this.flatMapNullable(node => node.childForFieldName(f))
+  }
+  type(t: string): Selection {
+    return this.filter(node => node.type === t)
+  }
+  namedChildren(): Selection {
+    return this.flatMap(node => node.namedChildren)
+  }
+  namedChild(i: number): Selection {
+    return this.flatMapNullable(node => node.namedChild(i))
+  }
+  text(value: string): Selection {
+    return this.filter(node => node.text === value)
+  }
+  getFirst(): SyntaxNode | undefined {
+    return this.nodes[0]
+  }
+  firstNamedIndex(): number | undefined {
+    return this.nodes.flatMap(node => {
+      if (!node.parent) return []
+      return node.parent.namedChildren.flatMap((sibling, i) => (sibling.id === node.id ? [i] : [])).find(notNull)
+    })[0]
+  }
+  has(f: (s: Selection)=> Selection): Selection {
+    return this.filter(node => f(new Selection(node)).nodes.length > 0)
+  }
+}
+
+const nullableToArray = <T>(value: T): NonNullable<T>[] => (value !== null && value !== undefined ? [value] : [])
+const toArrayIf = <T>(value: T, when: boolean): T[] => (when ? [value] : [])
+const truthy = <T>(value: T): boolean => Boolean(value)
+const notNull = <T>(value: T): boolean => value !== undefined && value !== null
+
+type Nullable<T> = T | null | undefined
 
 const nodeAtOffsetToRange = (document: vscode.TextDocument, node: SyntaxNode, offset: number): vscode.Range =>
   new vscode.Range(document.positionAt(offset + node.startIndex), document.positionAt(offset + node.endIndex))
