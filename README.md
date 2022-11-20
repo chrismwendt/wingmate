@@ -39,6 +39,24 @@ Some themes don't support semantic highlighting and you need to force it:
 }
 ```
 
+In order for Wingmate to find your SQL strings, it needs to know which function parameters are SQL queries. The setting `wingmate.sinks` is an array of strings, where each string takes the form `function:parameter`. The `function` part is the name of your DB function, and the `parameter` part is the zero-based index of the SQL query parameter to that DB function. For example, for `QueryContext(ctx, query, args...)`, the sink entry would be `QueryContext:1`. By default, Wingmate knows about the `database/sql` and `github.com/keegancsmith/sqlf` packages:
+
+```json
+{
+  "wingmate.sinks": [
+    "ExecContext:1",
+    "PrepareContext:1",
+    "QueryContext:1",
+    "QueryRowContext:1",
+    "Exec:0",
+    "Prepare:0",
+    "Query:0",
+    "QueryRow:0",
+    "sqlf.Sprintf:0",
+  ]
+}
+```
+
 To get autocomplete in strings, you need to enable it:
 
 ```json
@@ -52,14 +70,6 @@ To get hover tooltips and column name completions, set your database connection:
 ```json
 {
   "wingmate.conn": "postgresql://localhost:5432/postgres"
-}
-```
-
-You can add custom SQL sinks in the form `function:parameter` to the parser if your DB functions aren't in the default list:
-
-```json
-{
-  "wingmate.sinks": ["sqlf.Sprintf:0"]
 }
 ```
 

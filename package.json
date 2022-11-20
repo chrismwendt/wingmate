@@ -7,7 +7,7 @@
     "type": "git",
     "url": "https://github.com/chrismwendt/wingmate.git"
   },
-  "version": "1.0.15",
+  "version": "1.0.16",
   "private": true,
   "engines": {
     "vscode": "^1.63.0"
@@ -30,6 +30,14 @@
         "wingmate.sinks": {
           "type": "array",
           "default": [
+            "ExecContext:1",
+            "PrepareContext:1",
+            "QueryContext:1",
+            "QueryRowContext:1",
+            "Exec:0",
+            "Prepare:0",
+            "Query:0",
+            "QueryRow:0",
             "sqlf.Sprintf:0"
           ],
           "description": "Arguments to functions that will be treated as SQL."
