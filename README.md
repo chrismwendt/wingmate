@@ -1,5 +1,8 @@
 # Wingmate SQL tools
 
+[![](https://vsmarketplacebadge.apphb.com/installs-short/chrismwendt.wingmate.svg?color=be6c0e)](https://marketplace.visualstudio.com/items?itemName=chrismwendt.wingmate)
+[![](https://vsmarketplacebadge.apphb.com/rating/chrismwendt.wingmate.svg?color=be6c0e)](https://marketplace.visualstudio.com/items?itemName=chrismwendt.wingmate)
+
 Recognizes SQL queries inside strings and provides syntax highlighting, syntax error detection, hover tooltips, and autocomplete:
 
 ![](./images/syntax-highlighting.png)
@@ -67,3 +70,7 @@ You can add custom SQL sinks in the form `function:parameter` to the parser if y
 - [python-string-sql](https://marketplace.visualstudio.com/items?itemName=ptweir.python-string-sql) for Python
 - [SQL tagged template literals](https://marketplace.visualstudio.com/items?itemName=frigus02.vscode-sql-tagged-template-literals) for JS/TS
 - [vscode-sql-template-literal](https://marketplace.visualstudio.com/items?itemName=forbeslindesay.vscode-sql-template-literal) for JS/TS
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=chrismwendt/wingmate&type=Date)](https://star-history.com/#chrismwendt/wingmate&Date)
