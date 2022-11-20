@@ -1,5 +1,6 @@
 **
 !out/
 !package.json
+!images/
 !LICENSE
 !README.md

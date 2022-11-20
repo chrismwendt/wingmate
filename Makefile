@@ -2,7 +2,7 @@
 
 all: wingmate.vsix
 
-wingmate.vsix: package.json yarn.lock LICENSE README.md .vscodeignore out/tree-sitter-go.wasm out/tree-sitter-sql.wasm tsconfig.json src/main.ts package.json yarn.lock
+wingmate.vsix: package.json yarn.lock LICENSE README.md .vscodeignore out/tree-sitter-go.wasm out/tree-sitter-sql.wasm tsconfig.json src/main.ts package.json yarn.lock images/icon.png
 	yarn --frozen-lockfile
 	yarn run esbuild ./src/main.ts --bundle --outfile=out/main.js --external:vscode --format=cjs --platform=node --sourcemap=inline --external:pg-native
 	cp node_modules/web-tree-sitter/tree-sitter.wasm out/tree-sitter.wasm

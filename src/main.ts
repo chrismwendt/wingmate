@@ -3,18 +3,25 @@ import {
   finalize,
   Subject,
   Subscription,
-  tap,
   TeardownLogic,
   BehaviorSubject,
   switchMap,
   map,
   skip,
   skipWhile,
+  distinctUntilChanged,
+  shareReplay,
+  catchError,
+  MonoTypeOperatorFunction,
+  EMPTY,
+  of,
+  tap,
+  filter,
 } from 'rxjs'
 import Parser, { SyntaxNode } from 'web-tree-sitter'
 import * as vscode from 'vscode'
 import path from 'path'
-import { Client } from 'pg'
+import { Client, Connection } from 'pg'
 
 export async function activate(context: vscode.ExtensionContext) {
   await activateAsync(context).catch(e => console.error(e))
@@ -31,28 +38,39 @@ export async function activateAsync(context: vscode.ExtensionContext) {
   goParser.setLanguage(await Parser.Language.load(path.join(extensionPath, 'out/tree-sitter-go.wasm')))
   const sqlParser = new Parser()
   sqlParser.setLanguage(await Parser.Language.load(path.join(extensionPath, 'out/tree-sitter-sql.wasm')))
+  addDisposable(() => sqlParser.delete())
+  addDisposable(() => goParser.delete())
 
-  const mapPrefixes = (prefixes: unknown): string[] =>
-    !Array.isArray(prefixes) ? [] : prefixes.filter((prefix): prefix is string => typeof prefix === 'string')
-
-  const prefixess = observeConfiguration('wingmate', 'prefixes', addDisposable, mapPrefixes)
+  const sinkss = observeConfiguration('wingmate', 'sinks', addDisposable, (sinks: unknown): Sink[] =>
+    !Array.isArray(sinks)
+      ? []
+      : sinks.flatMap(sink => {
+          if (typeof sink !== 'string') return []
+          const components = sink.split(':')
+          if (components.length !== 2) return []
+          const arg = parseInt(components[1])
+          if (!isFinite(arg)) return []
+          return { fn: components[0], arg }
+        })
+  )
 
   const legend = new vscode.SemanticTokensLegend(Object.values(TokenType))
   addDisposable(
-    prefixess
+    sinkss
       .pipe(
-        switchMap(prefixes => {
+        switchMap(sinks => {
           const provider: vscode.DocumentSemanticTokensProvider = {
             provideDocumentSemanticTokens(document: vscode.TextDocument): vscode.ProviderResult<vscode.SemanticTokens> {
               const tokensBuilder = new vscode.SemanticTokensBuilder(legend)
 
-              walkSql(document, goParser, sqlParser, prefixes, (sqlNode, range) => {
+              for (const { node: sqlNode, offset } of allNodesInSqlStrings(document, goParser, sqlParser, sinks)) {
                 const tokenType = nodeToTokenType(sqlNode)
                 if (tokenType) {
-                  for (const lineRange of singleLineRanges(range)) tokensBuilder.push(lineRange, tokenType, [])
-                  return 'bail'
+                  for (const lineRange of singleLineRanges(nodeAtOffsetToRange(document, sqlNode, offset))) {
+                    tokensBuilder.push(lineRange, tokenType, [])
+                  }
                 }
-              })
+              }
 
               return tokensBuilder.build()
             },
@@ -75,7 +93,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
 
   const diagnostics = addDisposable(vscode.languages.createDiagnosticCollection('sql'))
   addDisposable(
-    prefixess
+    sinkss
       .pipe(
         switchMap(prefixes => {
           return observeChangesToDocuments(addDisposable).pipe(
@@ -85,22 +103,25 @@ export async function activateAsync(context: vscode.ExtensionContext) {
                 case 'added':
                 case 'modified':
                   if (change.value.languageId !== 'go') break
-                  walkSql(change.value, goParser, sqlParser, prefixes, (sqlNode, range) => {
-                    if (sqlNode.type === 'ERROR') {
-                      const ancestry = ancestors(sqlNode)
-                        .map(ancestor => ancestor.type)
-                        .join('.')
-                      diags.push(
-                        new vscode.Diagnostic(
-                          range,
-                          `Syntax error in SQL at ${ancestry}`,
-                          vscode.DiagnosticSeverity.Error
-                        )
+                  diagnostics.set(
+                    change.value.uri,
+                    allSqlStrings(change.value, goParser, sqlParser, prefixes).flatMap(str => {
+                      if (!shouldReportDiagnostics(str.node)) return []
+                      return allNodes(str.node).flatMap(node =>
+                        node.type === 'ERROR'
+                          ? [
+                              new vscode.Diagnostic(
+                                nodeAtOffsetToRange(change.value, node, str.offset),
+                                `Syntax error in SQL at ${ancestors(node)
+                                  .map(ancestor => ancestor.type)
+                                  .join('.')}`,
+                                vscode.DiagnosticSeverity.Error
+                              ),
+                            ]
+                          : []
                       )
-                      return 'bail'
-                    }
-                  })
-                  diagnostics.set(change.value.uri, diags)
+                    })
+                  )
                   break
                 case 'deleted':
                   diagnostics.set(change.value.uri, [])
@@ -119,15 +140,19 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       { language: 'go' },
       {
         provideHover: (document, position, cancellation): vscode.ProviderResult<vscode.Hover> => {
-          const result = getSqlNodeAt(document, goParser, sqlParser, position, prefixess.value)
+          const result = getSqlNodeAt(document, goParser, sqlParser, position, sinkss.value)
           if (!result) return
-          const [stringStart, sqlNode] = result
+          const { offset: stringStart, node: sqlNode } = result
+          if (sqlNode.type !== 'identifier') return
+          if (!schemas.value)
+            return new vscode.Hover('Wingmate is not connected to a DB. Try changing wingmate.conn in your settings.')
           return {
             contents: [
               new vscode.MarkdownString(
-                ancestors(sqlNode)
-                  .map(ancestor => ancestor.type)
-                  .join('.')
+                schemas.value
+                  .filter(column => column.column_name.toLowerCase() === sqlNode.text.toLowerCase())
+                  .map(column => `- ${prettyColumn(column)}`)
+                  .join('\n')
               ),
             ],
             range: new vscode.Range(
@@ -145,9 +170,9 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       { language: 'go' },
       {
         provideDefinition: (document, position, cancellation): vscode.ProviderResult<vscode.Definition> => {
-          const result = getSqlNodeAt(document, goParser, sqlParser, position, prefixess.value)
+          const result = getSqlNodeAt(document, goParser, sqlParser, position, sinkss.value)
           if (!result) return
-          const [stringStart, sqlNode] = result
+          const { offset: stringStart, node: sqlNode } = result
           if (sqlNode.type !== 'identifier') return
           for (let node: SyntaxNode | null = sqlNode; node !== null; node = node.parent) {
             if (node.type !== 'statement') continue
@@ -173,9 +198,9 @@ export async function activateAsync(context: vscode.ExtensionContext) {
     document: vscode.TextDocument,
     position: vscode.Position
   ): vscode.ProviderResult<vscode.Location[]> => {
-    const result = getSqlNodeAt(document, goParser, sqlParser, position, prefixess.value)
+    const result = getSqlNodeAt(document, goParser, sqlParser, position, sinkss.value)
     if (!result) return
-    const [stringStart, sqlNode] = result
+    const { offset: stringStart, node: sqlNode } = result
     if (sqlNode.type !== 'identifier') return
     const root = getRoot(sqlNode)
     const locs: vscode.Location[] = []
@@ -201,127 +226,158 @@ export async function activateAsync(context: vscode.ExtensionContext) {
     vscode.languages.registerDocumentHighlightProvider({ language: 'go' }, { provideDocumentHighlights: findRefs })
   )
 
-  const conns = observeConfiguration('wingmate', 'conn', addDisposable, (conn: unknown): string | undefined =>
+  const connstrs = observeConfiguration('wingmate', 'conn', addDisposable, (conn: unknown): string | undefined =>
     typeof conn === 'string' ? conn : undefined
   )
 
+  const clients = new BehaviorSubject<Client | undefined>(undefined)
   addDisposable(
-    conns
+    connstrs
       .pipe(
-        skip(1),
-        // skipWhile(conn => conn?.includes('localhost:5432'))
-        // eslint-disable-next-line @typescript-eslint/no-misused-promises
-        tap(async conn => {
-          try {
-            const client = new Client(conn)
-            await client.connect()
-            await vscode.window.showInformationMessage('Connected to postgres ✅')
-          } catch (e) {
-            if (e instanceof Error) await vscode.window.showErrorMessage(`Failed to connect to postgres: ${e.message}`)
-            else await vscode.window.showErrorMessage('Failed to connect to postgres')
-          }
+        distinctUntilChanged(),
+        switchMap(connstr => {
+          if (!connstr) return of(undefined)
+
+          return new Observable<Client>(subscriber => {
+            const client = new Client(connstr)
+
+            client.connect().then(
+              () => {
+                subscriber.next(client)
+              },
+              async e => {
+                subscriber.next(undefined)
+                const choice = await vscode.window.showErrorMessage(
+                  `Failed to connect to postgres${
+                    e instanceof Error ? `: ${e.message}` : ''
+                  }. Try changing wingmate.conn in your settings.`,
+                  'Open settings'
+                )
+                if (choice == 'Open settings')
+                  await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
+              }
+            )
+
+            // eslint-disable-next-line @typescript-eslint/no-misused-promises
+            return () => client.end()
+          })
         })
+      )
+      .subscribe(clients)
+  )
+
+  addDisposable(
+    clients
+      .pipe(
+        filter(x => x !== undefined),
+        skip(1),
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
+        tap(async () => await vscode.window.showInformationMessage('Connected to postgres ✅'))
       )
       .subscribe()
   )
 
+  const schemas = new BehaviorSubject<Column[] | undefined>(undefined)
   addDisposable(
-    vscode.commands.registerTextEditorCommand('wingmate.complete', (editor, edit, offset: number, value: string) => {
-      edit.insert(editor.document.positionAt(offset), value)
+    clients
+      .pipe(
+        switchMap(client => {
+          if (!client) return of(undefined)
+          return getSchema(client)
+        })
+      )
+      .subscribe(schemas)
+  )
+
+  addDisposable(
+    vscode.commands.registerCommand('wingmate.refreshSchema', async () => {
+      if (!clients.value) {
+        const choice = await vscode.window.showErrorMessage(
+          'Wingmate is not connected to a DB. Try changing `wingmate.conn` in your settings.',
+          'Open settings'
+        )
+        if (choice == 'Open settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
+      } else {
+        schemas.next(await getSchema(clients.value))
+      }
     })
   )
 
-  const autocompleteReady = true
-  if (autocompleteReady) {
-    addDisposable(
-      vscode.languages.registerCompletionItemProvider(
-        { language: 'go' },
-        {
-          // Completion inside strings is disabled by default, need to enable it:
-          // https://github.com/microsoft/vscode/issues/23962#issuecomment-292079416
-          provideCompletionItems: async (document, position, cancellation, context) => {
-            const result = getSqlNodeAt(
-              document,
-              goParser,
-              sqlParser,
-              new vscode.Position(position.line, Math.max(0, position.character - 1)),
-              prefixess.value
-            )
-            if (!result) return
+  addDisposable(
+    vscode.commands.registerTextEditorCommand('wingmate.complete', (editor, _edit, offset: number, value: string) => {
+      const pos = editor.document.positionAt(offset)
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      ;(async () => {
+        await editor.edit(edit => edit.insert(pos, value))
+        editor.selection = new vscode.Selection(pos, pos)
+      })()
+    })
+  )
 
-            const conn = conns.value
-            if (!conn) return
-            const client = new Client(conn)
-            try {
-              await client.connect()
-            } catch (e) {
-              // don't spam
-              return
+  addDisposable(
+    vscode.languages.registerCompletionItemProvider(
+      { language: 'go' },
+      {
+        // Completion inside strings is disabled by default, need to enable it:
+        // https://github.com/microsoft/vscode/issues/23962#issuecomment-292079416
+        provideCompletionItems: (document, position, cancellation, context) => {
+          const result = getSqlNodeAt(
+            document,
+            goParser,
+            sqlParser,
+            new vscode.Position(position.line, Math.max(0, position.character - 1)),
+            sinkss.value
+          )
+          if (!result) return
+
+          const { offset: stringStart, node: sqlNode } = result
+
+          if (!schemas.value) return
+
+          const suggestion = ((): { alias: string | undefined; identLen: number; fromOffset: number } | undefined => {
+            if (sqlNode.type !== 'identifier') return
+            const parent = sqlNode.parent
+            if (!parent) return
+            const alias = parent.childForFieldName('table_alias')
+            const select = ancestors(sqlNode)
+              .reverse()
+              .find(n => n.type === 'select')
+            if (!select) return
+            let from: SyntaxNode | undefined = undefined
+            for (let n: SyntaxNode | null = select; n; n = n?.nextNamedSibling) {
+              if (n?.type === 'from') from = n
+            }
+            if (from && from.namedChildren.some(n => n.type === 'from_clause')) return
+            return {
+              alias: alias?.text,
+              identLen: sqlNode.text.length,
+              fromOffset: select.endIndex,
+            }
+          })()
+
+          return schemas.value.map(row => {
+            const completion = new vscode.CompletionItem({
+              label: row.column_name,
+              description: row.table_name,
+              detail: ' ' + prettyColumnType(row),
+            })
+            if (suggestion) {
+              completion.command = {
+                title: 'title',
+                command: 'wingmate.complete',
+                arguments: [
+                  stringStart + suggestion.fromOffset + (row.column_name.length - suggestion.identLen),
+                  ` FROM ${row.table_name}${suggestion.alias ? ` ${suggestion.alias}` : ''}`,
+                ],
+              }
             }
 
-            const [stringStart, sqlNode] = result
-
-            const res = await client.query<{
-              table_name: string
-              column_name: string
-              data_type: string
-              column_default: string | null
-              is_nullable: 'YES' | 'NO'
-            }>(
-              "select table_name, column_name, data_type, column_default, is_nullable from information_schema.columns where table_schema = 'public' group by table_name, column_name, data_type, column_default, is_nullable;"
-            )
-
-            const suggestion = ((): { alias: string | undefined; identLen: number; fromOffset: number } | undefined => {
-              if (sqlNode.type !== 'identifier') return
-              const parent = sqlNode.parent
-              if (!parent) return
-              const alias = parent.childForFieldName('table_alias')
-              const select = ancestors(sqlNode)
-                .reverse()
-                .find(n => n.type === 'select')
-              if (!select) return
-              let from: SyntaxNode | undefined = undefined
-              for (let n: SyntaxNode | null = select; n; n = n?.nextNamedSibling) {
-                if (n?.type === 'from') from = n
-              }
-              if (from && from.namedChildren.some(n => n.type === 'from_clause')) return
-              return {
-                alias: alias?.text,
-                identLen: sqlNode.text.length,
-                fromOffset: select.endIndex,
-              }
-            })()
-
-            const ret = res.rows.map(row => {
-              const completion = new vscode.CompletionItem({
-                label: row.column_name,
-                description: row.table_name,
-                detail:
-                  ' ' +
-                  row.data_type.toUpperCase() +
-                  (row.is_nullable === 'NO' ? ' NOT NULLABLE' : '') +
-                  (row.column_default !== null ? ' DEFAULT ' + row.column_default : ''),
-              })
-              if (suggestion) {
-                completion.command = {
-                  title: 'title',
-                  command: 'wingmate.complete',
-                  arguments: [
-                    stringStart + suggestion.fromOffset + (row.column_name.length - suggestion.identLen),
-                    ` FROM ${row.table_name}${suggestion.alias ? ` ${suggestion.alias}` : ''}`,
-                  ],
-                }
-              }
-
-              return completion
-            })
-            await client.end()
-            return ret
-          },
-        }
-      )
+            return completion
+          })
+        },
+      }
     )
-  }
+  )
 }
 
 enum TokenType {
@@ -346,10 +402,9 @@ const nodeToTokenType = (node: SyntaxNode): TokenType | undefined => {
   else return undefined
 }
 
-const walk = (root: SyntaxNode, f: (node: SyntaxNode) => 'bail' | void, debugLabel?: string): void => {
+const walk = (root: SyntaxNode, f: (node: SyntaxNode) => 'bail' | void): void => {
   const recur = (node?: SyntaxNode, depth = 0): void => {
     if (!node) return
-    if (debugLabel) console.log(`${debugLabel}:`, '  '.repeat(depth), JSON.stringify(node.text), `(${node.type})`)
     const behavior = f(node)
     if (behavior === 'bail') return
     for (const child of node.children) {
@@ -419,34 +474,73 @@ const singleLineRanges = (range: vscode.Range): vscode.Range[] => {
   return ranges
 }
 
-const walkSql = (
+const allSqlStrings = (
   document: vscode.TextDocument,
   goParser: Parser,
   sqlParser: Parser,
-  prefixes: string[],
-  f: (sqlNode: SyntaxNode, range: vscode.Range) => void
-): void => {
+  sinks: Sink[]
+): EmbeddedSyntaxNode[] => {
+  const ret: EmbeddedSyntaxNode[] = []
+
   const goRoot = goParser.parse(document.getText()).rootNode
 
   walk(goRoot, goNode => {
-    if (isSql(document, goNode, prefixes)) {
-      const str = goNode.text.slice(1, -1)
-      const sqlRoot = sqlParser.parse(str).rootNode
-      walk(sqlRoot, sqlNode => {
-        const range = new vscode.Range(
-          document.positionAt(goNode.startIndex + 1 + sqlNode.startIndex),
-          document.positionAt(goNode.startIndex + 1 + sqlNode.endIndex)
-        )
-        return f(sqlNode, range)
-      })
+    if (goNode.type !== 'call_expression') {
+      return
     }
+    const sink = sinks.find(sink => goNode.childForFieldName('function')?.text?.endsWith(sink.fn))
+    if (!sink) {
+      return
+    }
+    const argument_list = goNode.childForFieldName('arguments')
+    if (argument_list?.type !== 'argument_list') {
+      return
+    }
+    const arg = argument_list.namedChildren[sink.arg]
+    const goStr = isString(arg) ? arg : j2d(arg)
+    if (!goStr) {
+      return
+    }
+    const str = goStr.text.slice(1, -1)
+    const sqlRoot = sqlParser.parse(str).rootNode
+    ret.push({ node: sqlRoot, offset: goStr.startIndex + 1 })
   })
+
+  return ret
 }
 
-const isSql = (document: vscode.TextDocument, node: SyntaxNode, prefixes: string[]): boolean => {
-  if (!isString(node)) return false
-  const leading = document.getText(new vscode.Range(new vscode.Position(0, 0), document.positionAt(node.startIndex)))
-  return prefixes.some(prefix => leading.endsWith(prefix))
+const allNodesInSqlStrings = (
+  document: vscode.TextDocument,
+  goParser: Parser,
+  sqlParser: Parser,
+  sinks: Sink[]
+): EmbeddedSyntaxNode[] =>
+  allSqlStrings(document, goParser, sqlParser, sinks).flatMap(({ node: sqlRoot, offset }) => {
+    const ret: EmbeddedSyntaxNode[] = []
+    walk(sqlRoot, node => {
+      ret.push({ node, offset })
+    })
+    return ret
+  })
+
+const allNodes = (node: SyntaxNode): SyntaxNode[] => {
+  const nodes: SyntaxNode[] = []
+  walk(node, n => {
+    nodes.push(n)
+  })
+  return nodes
+}
+
+const hasError = (node: SyntaxNode): boolean => {
+  let found = false
+  walk(node, n => {
+    if (found) return 'bail'
+    if (n.type === 'ERROR') {
+      found = true
+      return 'bail'
+    }
+  })
+  return found
 }
 
 /** Returns [program, statement, ..., identifier] */
@@ -473,22 +567,13 @@ const getSqlNodeAt = (
   goParser: Parser,
   sqlParser: Parser,
   position: vscode.Position,
-  prefixes: string[]
-): [number, SyntaxNode] | undefined => {
-  const goRoot = goParser.parse(document.getText()).rootNode
-  const node = goRoot.descendantForPosition(positionToPoint(position))
-  if (!node) return
-  const string = ancestors(node).reverse().filter(isString)[0]
-  if (!string) return
-  if (!isSql(document, string, prefixes)) return
-  if (document.offsetAt(position) === string.startIndex) return
-  if (document.offsetAt(position) === string.endIndex - 1) return
-  const str = string.text.slice(1, -1)
-  const sqlRoot = sqlParser.parse(str).rootNode
-  const stringStart = document.offsetAt(nodeToRange(string).start) + 1
-  const indexInSql = document.offsetAt(position) - stringStart
-  const sqlNode = sqlRoot.descendantForIndex(indexInSql)
-  return [stringStart, sqlNode]
+  sinks: Sink[]
+): EmbeddedSyntaxNode | undefined => {
+  return allSqlStrings(document, goParser, sqlParser, sinks).flatMap(({ node, offset }) =>
+    nodeAtOffsetToRange(document, node, offset).contains(position)
+      ? [{ offset, node: node.descendantForIndex(document.offsetAt(position) - offset) }]
+      : []
+  )[0]
 }
 
 const observeConfiguration = <T>(
@@ -510,4 +595,71 @@ const getRoot = (node: SyntaxNode): SyntaxNode => {
   let n = node
   while (n.parent) n = n.parent
   return n
+}
+
+type Sink = { fn: string; arg: number }
+
+const j2d = (node: SyntaxNode): SyntaxNode | undefined => {
+  if (node.type !== 'identifier') return
+  for (const top of getRoot(node).namedChildren) {
+    if (top.type !== 'const_declaration') continue
+    const const_spec = top.namedChildren[0]
+    if (const_spec?.type !== 'const_spec') continue
+    if (const_spec.childForFieldName('name')?.text !== node.text) continue
+    const str = const_spec.childForFieldName('value')?.namedChildren[0]
+    if (!str || !isString(str)) continue
+    return str
+  }
+}
+
+const nodeAtOffsetToRange = (document: vscode.TextDocument, node: SyntaxNode, offset: number): vscode.Range =>
+  new vscode.Range(document.positionAt(offset + node.startIndex), document.positionAt(offset + node.endIndex))
+
+type EmbeddedSyntaxNode = { node: SyntaxNode; offset: number }
+
+const prettyRange = (range: vscode.Range): string =>
+  `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`
+
+const shouldReportDiagnostics = (node: SyntaxNode): boolean => {
+  return /^\s*(SELECT|UPDATE|DELETE|INSERT)/.test(node.text)
+}
+
+type Column = {
+  table_name: string
+  column_name: string
+  data_type: string
+  column_default: string | null
+  is_nullable: 'YES' | 'NO'
+}
+
+const getSchema = async (client: Client): Promise<Column[] | undefined> =>
+  (
+    await client.query<Column>(`
+                SELECT table_name, column_name, data_type, column_default, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                GROUP BY table_name, column_name, data_type, column_default, is_nullable
+              `)
+  ).rows
+
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// function tap<T>(fn: (t: T) => any): MonoTypeOperatorFunction<T> {
+//   return o =>
+//     o.pipe(
+//       // eslint-disable-next-line @typescript-eslint/no-misused-promises
+//       tap(async t => {
+//         await fn(t)
+//       })
+//     )
+// }
+
+const prettyColumn = (column: Column): string =>
+  `${column.table_name}.${column.column_name} ${prettyColumnType(column)}`
+
+const prettyColumnType = (column: Column): string => {
+  let str = ''
+  str += column.data_type.toUpperCase()
+  str += column.is_nullable === 'NO' ? ' NOT NULLABLE' : ''
+  str += column.column_default !== null ? ' DEFAULT ' + column.column_default : ''
+  return str
 }

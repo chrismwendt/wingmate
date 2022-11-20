@@ -7,7 +7,7 @@
     "type": "git",
     "url": "https://github.com/chrismwendt/wingmate.git"
   },
-  "version": "1.0.12",
+  "version": "1.0.13",
   "private": true,
   "engines": {
     "vscode": "^1.63.0"
@@ -16,19 +16,23 @@
   "activationEvents": [
     "onLanguage:go"
   ],
+  "icon": "images/icon.png",
   "contributes": {
+    "commands": [
+      {
+        "command": "wingmate.refreshSchema",
+        "title": "Wingmate: Refresh Schema"
+      }
+    ],
     "configuration": {
       "title": "Wingmate",
       "properties": {
-        "wingmate.prefixes": {
+        "wingmate.sinks": {
           "type": "array",
           "default": [
-            "Exec(",
-            "Prepare(",
-            "Query(",
-            "/*SQL*/ "
+            "sqlf.Sprintf:0"
           ],
-          "description": "Strings to the right of any of these prefixes will be considered SQL."
+          "description": "Arguments to functions that will be treated as SQL."
         },
         "wingmate.conn": {
           "type": "string",
