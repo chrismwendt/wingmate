@@ -1,8 +1,12 @@
 # Wingmate SQL tools
 
-Recognizes SQL within code strings using [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and does syntax highlighting and syntax error detection:
+Recognizes SQL queries inside strings and provides syntax highlighting, syntax error detection, hover tooltips, and autocomplete:
 
-![](./images/screenshot.png)
+![](./images/syntax-highlighting.png)
+
+![](./images/syntax-error.png)
+
+![](./images/hover.png)
 
 ![](./images/completions.png)
 
@@ -40,7 +44,7 @@ To get autocomplete in strings, you need to enable it:
 }
 ```
 
-To get column name completions, set your database connection:
+To get hover tooltips and column name completions, set your database connection:
 
 ```json
 {
@@ -48,11 +52,11 @@ To get column name completions, set your database connection:
 }
 ```
 
-You can add custom SQL prefixes (or hints) to the parser if your DB methods aren't in the default list:
+You can add custom SQL sinks in the form `function:parameter` to the parser if your DB functions aren't in the default list:
 
 ```json
 {
-  "wingmate.prefixes": ["Exec(", "Prepare(", "Query(", "/*SQL*/ "]
+  "wingmate.sinks": ["sqlf.Sprintf:0"]
 }
 ```
 

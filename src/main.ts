@@ -181,7 +181,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
                   .map(c => `- ${c.table_name}.**${c.column_name}** \`${prettyColumnType(c)}\``)
                   .join('\n')}`
               : columnMatches.length > 0
-              ? `**${ident}** ${prettyColumnType(columnMatches[0])}`
+              ? `**${ident}** \`${prettyColumnType(columnMatches[0])}\``
               : ''
 
           return {
