@@ -446,6 +446,7 @@ enum TokenType {
   identifier = 'sqlidentifier',
   operator = 'sqloperator',
   whitespace = 'sqlwhitespace',
+  var = 'sqlvar',
 }
 
 const nodeToTokenType = (node: SyntaxNode): TokenType | undefined => {
@@ -456,6 +457,7 @@ const nodeToTokenType = (node: SyntaxNode): TokenType | undefined => {
   else if (node.type === 'comment') return TokenType.comment
   else if (node.type === 'identifier') return TokenType.identifier
   else if (/^[`~!@#$%^&*()\-_=+\\|/?,<.>;:]+$/.test(node.type)) return TokenType.operator
+  else if (node.type === 'var') return TokenType.var
   else return undefined
 }
 
