@@ -23,6 +23,7 @@ import * as vscode from 'vscode'
 import path from 'path'
 import { Client, Connection } from 'pg'
 import _ from 'lodash'
+import canonicalize from 'canonicalize'
 
 export async function activate(context: vscode.ExtensionContext) {
   await activateAsync(context).catch(e => console.error(e))
@@ -291,7 +292,6 @@ export async function activateAsync(context: vscode.ExtensionContext) {
   addDisposable(
     connstrs
       .pipe(
-        distinctUntilChanged(),
         switchMap(connstr => {
           if (!connstr) return of(undefined)
 
@@ -304,14 +304,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
               },
               async e => {
                 subscriber.next(undefined)
-                const choice = await vscode.window.showErrorMessage(
-                  `Failed to connect to postgres${
-                    e instanceof Error ? `: ${e.message}` : ''
-                  }. Try changing wingmate.conn in your settings.`,
-                  'Open settings'
-                )
-                if (choice == 'Open settings')
-                  await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
+                await onNoConnection(e)
               }
             )
 
@@ -346,14 +339,22 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       .subscribe(schemas)
   )
 
+  const onNoConnection = async (e?: unknown) => {
+    const choice = await vscode.window.showErrorMessage(
+      `Failed to connect to postgres${
+        e instanceof Error ? `: ${e.message}` : ''
+      }. Try changing wingmate.conn in your settings.`,
+      'Open settings',
+      'Try again'
+    )
+    if (choice == 'Open settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
+    if (choice == 'Try again') await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
+  }
+
   addDisposable(
     vscode.commands.registerCommand('wingmate.refreshSchema', async () => {
       if (!clients.value) {
-        const choice = await vscode.window.showErrorMessage(
-          'Wingmate is not connected to a DB. Try changing `wingmate.conn` in your settings.',
-          'Open settings'
-        )
-        if (choice == 'Open settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
+        await onNoConnection()
       } else {
         schemas.next(await getSchema(clients.value))
       }
@@ -639,15 +640,18 @@ const observeConfiguration = <T>(
   section1: string,
   section2: string,
   addDisposable: AddDisposable,
-  mapFn: (arg: unknown) => T
+  mapFn: (arg: json | undefined) => T
 ): BehaviorSubject<T> => {
-  const behaviorSubject = new BehaviorSubject(mapFn(vscode.workspace.getConfiguration(section1).get(section2)))
+  const confs = new BehaviorSubject<json | undefined>(vscode.workspace.getConfiguration(section1).get(section2))
   addDisposable(
     vscode.workspace.onDidChangeConfiguration(() => {
-      behaviorSubject.next(mapFn(vscode.workspace.getConfiguration(section1).get(section2)))
+      const value = vscode.workspace.getConfiguration(section1).get(section2)
+      if (canonicalize(value) !== confs.value) confs.next(vscode.workspace.getConfiguration(section1).get(section2))
     })
   )
-  return behaviorSubject
+  const ret = new BehaviorSubject<T>(mapFn(confs.value))
+  addDisposable(confs.pipe(map(mapFn)).subscribe(ret))
+  return ret
 }
 
 const getRoot = (node: SyntaxNode): SyntaxNode => {
@@ -799,3 +803,5 @@ const prettyColumnType = (column: Column): string => {
   str += column.column_default !== null ? ' DEFAULT ' + column.column_default : ''
   return str
 }
+
+type json = string | number | boolean | null | json[] | { [key: string]: json }
