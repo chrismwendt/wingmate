@@ -140,7 +140,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
     vscode.languages.registerHoverProvider(
       { language: 'go' },
       {
-        provideHover: (document, position, cancellation): vscode.ProviderResult<vscode.Hover> => {
+        provideHover: async (document, position, cancellation): Promise<vscode.Hover | undefined> => {
           const result = getSqlNodeAt(document, goParser, sqlParser, position, sinkss.value)
           if (!result) return
           const { offset: stringStart, node: sqlNode } = result
@@ -175,14 +175,35 @@ export async function activateAsync(context: vscode.ExtensionContext) {
             .value()
 
           const columnMatches = schemas.value.filter(c => c.column_name === ident)
-          const summary =
-            columnMatches.length > 1
-              ? `Matches for **${ident}**:\n\n${columnMatches
-                  .map(c => `- ${c.table_name}.**${c.column_name}** \`${prettyColumnType(c)}\``)
-                  .join('\n')}`
-              : columnMatches.length > 0
-              ? `**${ident}** \`${prettyColumnType(columnMatches[0])}\``
-              : ''
+          const m = new Map<string, unknown>()
+          const key = (column: Column): string => `${column.table_name}.${column.column_name}`
+          if (clients.value) {
+            for (const column of columnMatches) {
+              const res = await clients.value.query<{ sample: unknown }>(
+                `SELECT ${column.column_name} AS sample FROM ${column.table_name} LIMIT 1`
+              )
+              m.set(key(column), res.rows[0]?.sample)
+            }
+          }
+          const summary = (() => {
+            if (columnMatches.length === 0) return ''
+            const pretty = (c: Column): string => {
+              const prettyValue = (v: unknown): string => {
+                if (v === null) return 'NULL'
+                if (typeof v === 'number') return v.toString()
+                const show = (s: string): string => {
+                  if (s.length > 30) return `\`${s.slice(0, 30).replaceAll('`', '\\`')}...\``
+                  else return `\`${s.replaceAll('`', '\\`')}\``
+                }
+                if (typeof v === 'string') return show(v)
+                return show(JSON.stringify(v))
+              }
+              const sample =
+                m.get(key(c)) === undefined ? '(empty table)' : `first value: \`${prettyValue(m.get(key(c)))}\``
+              return `- ${c.table_name}.**${c.column_name}** \`${prettyColumnType(c)}\` ${sample}`
+            }
+            return `Matches for **${ident}**:\n\n${columnMatches.map(pretty).join('\n')}`
+          })()
 
           return {
             contents: [
@@ -644,7 +665,7 @@ const j2d = (node: SyntaxNode): SyntaxNode | undefined => {
         const str = new Selection(child)
           .namedChild(0)
           .type('const_spec')
-          .has(s => s.field('name') .text(ident))
+          .has(s => s.field('name').text(ident))
           .field('value')
           .namedChild(0)
           .filter(isString)
@@ -711,7 +732,7 @@ class Selection {
       return node.parent.namedChildren.flatMap((sibling, i) => (sibling.id === node.id ? [i] : [])).find(notNull)
     })[0]
   }
-  has(f: (s: Selection)=> Selection): Selection {
+  has(f: (s: Selection) => Selection): Selection {
     return this.filter(node => f(new Selection(node)).nodes.length > 0)
   }
 }
