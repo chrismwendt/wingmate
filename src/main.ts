@@ -17,6 +17,13 @@ import {
   of,
   tap,
   filter,
+  combineLatest,
+  startWith,
+  interval,
+  window,
+  bufferCount,
+  reduce,
+  scan,
 } from 'rxjs'
 import Parser, { SyntaxNode } from 'web-tree-sitter'
 import * as vscode from 'vscode'
@@ -24,6 +31,7 @@ import path from 'path'
 import { Client, Connection } from 'pg'
 import _ from 'lodash'
 import canonicalize from 'canonicalize'
+import manifest from '../package.json'
 
 export async function activate(context: vscode.ExtensionContext) {
   await activateAsync(context).catch(e => console.error(e))
@@ -32,8 +40,12 @@ export async function activate(context: vscode.ExtensionContext) {
 export async function activateAsync(context: vscode.ExtensionContext) {
   const addDisposable = mkAddDisposable(context)
 
-  const extensionPath = vscode.extensions.getExtension('chrismwendt.wingmate')?.extensionPath
-  if (!extensionPath) throw new Error('❌ no extension path')
+  const status = addDisposable(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left))
+  status.text = 'Wingmate'
+  status.show()
+
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-unsafe-member-access
+  const extensionPath = vscode.extensions.getExtension(`${manifest.publisher}.${manifest.name}`)!.extensionPath
 
   await Parser.init()
   const goParser = new Parser()
@@ -146,8 +158,13 @@ export async function activateAsync(context: vscode.ExtensionContext) {
           if (!result) return
           const { offset: stringStart, node: sqlNode } = result
           if (sqlNode.type !== 'identifier') return
-          if (!schemas.value)
-            return new vscode.Hover('Wingmate is not connected to a DB. Try changing wingmate.conn in your settings.')
+          if (!schemas.value) {
+            const str = new vscode.MarkdownString(
+              `Wingmate is not connected to a DB. Try [reconnecting](command:wingmate.reconnect) or changing the [wingmate.conn setting](command:${settingsCmdLink}).`
+            )
+            str.isTrusted = true
+            return new vscode.Hover(str)
+          }
           const ident = sqlNode.text
           const range = new vscode.Range(
             document.positionAt(stringStart + sqlNode.startIndex),
@@ -178,7 +195,7 @@ export async function activateAsync(context: vscode.ExtensionContext) {
           const columnMatches = schemas.value.filter(c => c.column_name === ident)
           const m = new Map<string, unknown>()
           const key = (column: Column): string => `${column.table_name}.${column.column_name}`
-          if (clients.value) {
+          if (clients.value instanceof Client) {
             for (const column of columnMatches) {
               const res = await clients.value.query<{ sample: unknown }>(
                 `SELECT ${column.column_name} AS sample FROM ${column.table_name} LIMIT 1`
@@ -288,26 +305,23 @@ export async function activateAsync(context: vscode.ExtensionContext) {
     typeof conn === 'string' ? conn : undefined
   )
 
-  const clients = new BehaviorSubject<Client | undefined>(undefined)
+  const reconnects = new Subject<undefined>()
+
+  type ClientType = 'initial' | 'connecting' | Client | Error | 'needs URL'
+  const clients = new BehaviorSubject<ClientType>('initial')
   addDisposable(
-    connstrs
+    combineLatest([connstrs, reconnects.pipe(startWith(undefined))])
       .pipe(
-        switchMap(connstr => {
-          if (!connstr) return of(undefined)
-
-          return new Observable<Client>(subscriber => {
+        switchMap(([connstr]) => {
+          if (!connstr) return of('needs URL' as const)
+          return new Observable<ClientType>(subscriber => {
             const client = new Client(connstr)
-
+            client.on('error', e => subscriber.next(e instanceof Error ? e : new Error('DB connection error')))
+            subscriber.next('connecting')
             client.connect().then(
-              () => {
-                subscriber.next(client)
-              },
-              async e => {
-                subscriber.next(undefined)
-                await onNoConnection(e)
-              }
+              () => subscriber.next(client),
+              e => subscriber.next(e instanceof Error ? e : new Error('Failed to connect to postgres'))
             )
-
             // eslint-disable-next-line @typescript-eslint/no-misused-promises
             return () => client.end()
           })
@@ -319,44 +333,106 @@ export async function activateAsync(context: vscode.ExtensionContext) {
   addDisposable(
     clients
       .pipe(
-        filter(x => x !== undefined),
-        skip(1),
         // eslint-disable-next-line @typescript-eslint/no-misused-promises
-        tap(async () => await vscode.window.showInformationMessage('Connected to postgres ✅'))
+        tap(client => {
+          if (client === 'initial') return
+          if (client === 'connecting') {
+            status.text = 'Wingmate ⚡'
+            status.tooltip = 'Connecting to DB...'
+            status.command = undefined
+          }
+          if (client === 'needs URL') {
+            status.text = 'Wingmate ❌'
+            status.tooltip = 'No connection string given.'
+            status.command = {
+              title: 'Open settings',
+              command: 'workbench.action.openSettings',
+              arguments: ['wingmate'],
+            }
+          }
+          if (client instanceof Error) {
+            status.text = 'Wingmate ❌'
+            status.tooltip = new vscode.MarkdownString()
+              .appendText(`${client.message}.`)
+              .appendMarkdown(
+                ` Try [reconnecting](command:wingmate.reconnect) or changing the [wingmate.conn setting](command:${settingsCmdLink}).`
+              )
+            status.tooltip.isTrusted = true
+            status.command = {
+              title: 'Open settings',
+              command: 'workbench.action.openSettings',
+              arguments: ['wingmate'],
+            }
+          }
+          if (client instanceof Client) {
+            status.text = 'Wingmate ✅'
+            status.tooltip = `Connected to DB.`
+            status.command = undefined
+          }
+        })
       )
       .subscribe()
   )
 
-  const schemas = new BehaviorSubject<Column[] | undefined>(undefined)
   addDisposable(
     clients
       .pipe(
-        switchMap(client => {
-          if (!client) return of(undefined)
+        scan((notify, client) => {
+          if (notify && client instanceof Client) {
+            void vscode.window.showInformationMessage('Connected to DB ✅')
+            return false
+          }
+          if (client instanceof Error) notify = true
+          if (client === 'needs URL') notify = true
+          return notify
+        }, false)
+      )
+      .subscribe()
+  )
+
+  addDisposable(
+    clients
+      .pipe(
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
+        tap(async client => {
+          if (client instanceof Error) {
+            const choice = await vscode.window.showErrorMessage(
+              `Failed to connect to postgres: ${client.message}. Try changing the [wingmate.conn setting](command:${settingsCmdLink}).`,
+              'Try again'
+            )
+            if (choice == 'Try again') reconnects.next(undefined)
+          }
+        })
+      )
+      .subscribe()
+  )
+
+  const refreshSchemas = new Subject<undefined>()
+
+  const schemas = new BehaviorSubject<Column[] | undefined>(undefined)
+  addDisposable(
+    combineLatest([clients, refreshSchemas.pipe(startWith(undefined))])
+      .pipe(
+        switchMap(([client]) => {
+          if (!(client instanceof Client)) return of(undefined)
           return getSchema(client)
         })
       )
       .subscribe(schemas)
   )
 
-  const onNoConnection = async (e?: unknown) => {
-    const choice = await vscode.window.showErrorMessage(
-      `Failed to connect to postgres${
-        e instanceof Error ? `: ${e.message}` : ''
-      }. Try changing wingmate.conn in your settings.`,
-      'Open settings',
-      'Try again'
-    )
-    if (choice == 'Open settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
-    if (choice == 'Try again') await vscode.commands.executeCommand('workbench.action.openSettings', 'wingmate')
-  }
+  addDisposable(
+    vscode.commands.registerCommand('wingmate.reconnect', () => {
+      reconnects.next(undefined)
+    })
+  )
 
   addDisposable(
-    vscode.commands.registerCommand('wingmate.refreshSchema', async () => {
-      if (!clients.value) {
-        await onNoConnection()
+    vscode.commands.registerCommand('wingmate.refreshSchema', () => {
+      if (!(clients.value instanceof Client)) {
+        reconnects.next(undefined)
       } else {
-        schemas.next(await getSchema(clients.value))
+        refreshSchemas.next(undefined)
       }
     })
   )
@@ -805,3 +881,5 @@ const prettyColumnType = (column: Column): string => {
 }
 
 type json = string | number | boolean | null | json[] | { [key: string]: json }
+
+const settingsCmdLink = `workbench.action.openSettings?${encodeURIComponent(JSON.stringify('wingmate'))}`

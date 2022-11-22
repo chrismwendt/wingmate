@@ -9,5 +9,6 @@
     "inlineSourceMap": true,
     "inlineSources": true,
     "esModuleInterop": true,
+    "resolveJsonModule": true,
   }
 }

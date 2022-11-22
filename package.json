@@ -7,7 +7,7 @@
     "type": "git",
     "url": "https://github.com/chrismwendt/wingmate.git"
   },
-  "version": "1.0.18",
+  "version": "1.0.19",
   "private": true,
   "engines": {
     "vscode": "^1.63.0"
@@ -19,6 +19,10 @@
   "icon": "images/icon.png",
   "contributes": {
     "commands": [
+      {
+        "command": "wingmate.reconnect",
+        "title": "Wingmate: Reconnect To DB"
+      },
       {
         "command": "wingmate.refreshSchema",
         "title": "Wingmate: Refresh Schema"
