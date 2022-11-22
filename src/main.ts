@@ -462,9 +462,26 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       const client = clients.value
 
       ctch(async () => {
-        const pglist = (str: string, n: number): string => (n === 0 ? '' : `(${Array(n).fill(str).join(',')})`)
         let argCount = 0
-        const q = str.node.text.replaceAll(/%s/g, () => '$' + (++argCount).toString())
+        const q = /%s/.test(str.node.text)
+          ? str.node.text.replaceAll(/%s/g, () => '$' + (++argCount).toString())
+          : /@\w+/.test(str.node.text)
+          ? (() => {
+              const m = new Map<string, string>()
+              return str.node.text.replaceAll(/@\w+/g, v => {
+                const found = m.get(v)
+                if (found) return found
+                const s = '$' + (++argCount).toString()
+                m.set(v, s)
+                return s
+              })
+            })()
+          : str.node.text
+        const re = /\$(\d+)/g
+        for (let result = re.exec(q); result !== null; result = re.exec(q)) {
+          argCount = Math.max(argCount, parseInt(result[1]))
+        }
+        const pglist = (str: string, n: number): string => (n === 0 ? '' : `(${Array(n).fill(str).join(',')})`)
         await client.query(`PREPARE _stmt_${pglist('unknown', argCount)} AS ${q}`)
         const res = await client.query<{ 'QUERY PLAN': string }>(
           `EXPLAIN (FORMAT TEXT) EXECUTE _stmt_${pglist('NULL', argCount)}`
