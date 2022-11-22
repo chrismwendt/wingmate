@@ -13,6 +13,8 @@ Recognizes SQL queries inside strings and provides syntax highlighting, syntax e
 
 ![](./images/completions.png)
 
+![](./images/explain-query.png)
+
 Free for non-commercial use.
 
 You need a [subscription](https://buy.stripe.com/fZeaEG6em0Bx6LmbII) for commercial use.

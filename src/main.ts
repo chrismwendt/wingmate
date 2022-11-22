@@ -319,7 +319,10 @@ export async function activateAsync(context: vscode.ExtensionContext) {
             client.on('error', e => subscriber.next(e instanceof Error ? e : new Error('DB connection error')))
             subscriber.next('connecting')
             client.connect().then(
-              () => subscriber.next(client),
+              async () => {
+                await client.query(`SET plan_cache_mode = force_generic_plan`)
+                subscriber.next(client)
+              },
               e => subscriber.next(e instanceof Error ? e : new Error('Failed to connect to postgres'))
             )
             // eslint-disable-next-line @typescript-eslint/no-misused-promises
@@ -424,6 +427,74 @@ export async function activateAsync(context: vscode.ExtensionContext) {
   addDisposable(
     vscode.commands.registerCommand('wingmate.reconnect', () => {
       reconnects.next(undefined)
+    })
+  )
+
+  let doc: vscode.TextDocument | undefined = undefined
+
+  addDisposable(
+    vscode.commands.registerCommand('wingmate.explainQuery', async () => {
+      if (!vscode.window.activeTextEditor) {
+        await vscode.window.showErrorMessage('There is no active text editor.')
+        return
+      }
+      const str = sqlStringAt(
+        vscode.window.activeTextEditor.document,
+        goParser,
+        sqlParser,
+        sinkss.value,
+        vscode.window.activeTextEditor.selection.active
+      )
+      if (!str) {
+        await vscode.window.showErrorMessage(
+          `Did not recognize any SQL query under the cursor. Make sure it is being passed as an argument to one of the configured [wingmate.sinks](${settingsCmdLink}).`
+        )
+        return
+      }
+
+      if (!(clients.value instanceof Client)) {
+        await vscode.window.showErrorMessage(
+          `Wingmate is not connected to a DB. Try [reconnecting](command:wingmate.reconnect) or changing the [wingmate.conn setting](command:${settingsCmdLink}).`
+        )
+        return
+      }
+
+      const client = clients.value
+
+      ctch(async () => {
+        const pglist = (str: string, n: number): string => (n === 0 ? '' : `(${Array(n).fill(str).join(',')})`)
+        let argCount = 0
+        const q = str.node.text.replaceAll(/%s/g, () => '$' + (++argCount).toString())
+        await client.query(`PREPARE _stmt_${pglist('unknown', argCount)} AS ${q}`)
+        const res = await client.query<{ 'QUERY PLAN': string }>(
+          `EXPLAIN (FORMAT TEXT) EXECUTE _stmt_${pglist('NULL', argCount)}`
+        )
+        await client.query('DEALLOCATE _stmt_')
+        const content = res.rows.map(row => row['QUERY PLAN']).join('\n')
+        if (!doc) {
+          doc = await vscode.workspace.openTextDocument({
+            content,
+          })
+        } else {
+          const edit = new vscode.WorkspaceEdit()
+          edit.replace(
+            doc.uri,
+            new vscode.Range(new vscode.Position(0, 0), doc.positionAt(Number.POSITIVE_INFINITY)),
+            content
+          )
+          const success = await vscode.workspace.applyEdit(edit)
+          if (!success) {
+            await vscode.window.showErrorMessage('Failed to replace the query plan output.')
+            return
+          }
+        }
+        await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true })
+        addDisposable(
+          vscode.workspace.onDidCloseTextDocument(e => {
+            if (e === doc) doc = undefined
+          })
+        )
+      })
     })
   )
 
@@ -609,6 +680,17 @@ const singleLineRanges = (range: vscode.Range): vscode.Range[] => {
   }
   return ranges
 }
+
+const sqlStringAt = (
+  document: vscode.TextDocument,
+  goParser: Parser,
+  sqlParser: Parser,
+  sinks: Sink[],
+  pos: vscode.Position
+): EmbeddedSyntaxNode | undefined =>
+  allSqlStrings(document, goParser, sqlParser, sinks).find(({ node, offset }) =>
+    new vscode.Range(document.positionAt(offset), document.positionAt(offset + node.endIndex)).contains(pos)
+  )
 
 const allSqlStrings = (
   document: vscode.TextDocument,
@@ -883,3 +965,23 @@ const prettyColumnType = (column: Column): string => {
 type json = string | number | boolean | null | json[] | { [key: string]: json }
 
 const settingsCmdLink = `workbench.action.openSettings?${encodeURIComponent(JSON.stringify('wingmate'))}`
+
+const ctch = (f: () => Promise<unknown>): void => {
+  f().catch(async e => {
+    if (typeof e === 'string') {
+      await vscode.window.showErrorMessage(e)
+    } else if (e instanceof Error) {
+      await vscode.window.showErrorMessage(e.toString())
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    } else if (e && typeof e === 'object' && 'toString' in e && typeof e.toString === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+      await vscode.window.showErrorMessage(e.toString())
+    } else if (e) {
+      await vscode.window.showErrorMessage(JSON.stringify(e))
+    } else {
+      await vscode.window.showErrorMessage('An unknown error occurred.')
+    }
+  })
+}
+
+const countMatches = (str: string, re: RegExp): number => (str.match(re) ?? []).length
