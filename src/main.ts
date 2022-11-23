@@ -105,49 +105,52 @@ export async function activateAsync(context: vscode.ExtensionContext) {
       .subscribe()
   )
 
-  const diagnostics = addDisposable(vscode.languages.createDiagnosticCollection('sql'))
-  addDisposable(
-    sinkss
-      .pipe(
-        switchMap(prefixes => {
-          return observeChangesToDocuments(addDisposable).pipe(
-            tap(change => {
-              const diags: vscode.Diagnostic[] = []
-              switch (change.brand) {
-                case 'added':
-                case 'modified':
-                  if (change.value.languageId !== 'go') break
-                  diagnostics.set(
-                    change.value.uri,
-                    allSqlStrings(change.value, goParser, sqlParser, prefixes).flatMap(str => {
-                      if (!shouldReportDiagnostics(str.node)) return []
-                      return allNodes(str.node).flatMap(node =>
-                        node.type === 'ERROR'
-                          ? [
-                              new vscode.Diagnostic(
-                                nodeAtOffsetToRange(change.value, node, str.offset),
-                                `Syntax error in SQL at ${ancestors(node)
-                                  .map(ancestor => ancestor.type)
-                                  .join('.')}`,
-                                vscode.DiagnosticSeverity.Error
-                              ),
-                            ]
-                          : []
-                      )
-                    })
-                  )
-                  break
-                case 'deleted':
-                  diagnostics.set(change.value.uri, [])
-                  break
-              }
-            }),
-            finalize(() => diagnostics.clear())
-          )
-        })
-      )
-      .subscribe()
-  )
+  const diagnosticsReady = false
+  if (diagnosticsReady) {
+    const diagnostics = addDisposable(vscode.languages.createDiagnosticCollection('sql'))
+    addDisposable(
+      sinkss
+        .pipe(
+          switchMap(prefixes => {
+            return observeChangesToDocuments(addDisposable).pipe(
+              tap(change => {
+                const diags: vscode.Diagnostic[] = []
+                switch (change.brand) {
+                  case 'added':
+                  case 'modified':
+                    if (change.value.languageId !== 'go') break
+                    diagnostics.set(
+                      change.value.uri,
+                      allSqlStrings(change.value, goParser, sqlParser, prefixes).flatMap(str => {
+                        if (!shouldReportDiagnostics(str.node)) return []
+                        return allNodes(str.node).flatMap(node =>
+                          node.type === 'ERROR'
+                            ? [
+                                new vscode.Diagnostic(
+                                  nodeAtOffsetToRange(change.value, node, str.offset),
+                                  `Syntax error in SQL at ${ancestors(node)
+                                    .map(ancestor => ancestor.type)
+                                    .join('.')}`,
+                                  vscode.DiagnosticSeverity.Error
+                                ),
+                              ]
+                            : []
+                        )
+                      })
+                    )
+                    break
+                  case 'deleted':
+                    diagnostics.set(change.value.uri, [])
+                    break
+                }
+              }),
+              finalize(() => diagnostics.clear())
+            )
+          })
+        )
+        .subscribe()
+    )
+  }
 
   addDisposable(
     vscode.languages.registerHoverProvider(

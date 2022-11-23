@@ -7,7 +7,7 @@ Recognizes SQL queries inside strings and provides syntax highlighting, syntax e
 
 ![](./images/syntax-highlighting.png)
 
-![](./images/syntax-error.png)
+<!-- ![](./images/syntax-error.png) not ready -->
 
 ![](./images/hover.png)
 
