@@ -34,10 +34,6 @@ import canonicalize from 'canonicalize'
 import manifest from '../package.json'
 
 export async function activate(context: vscode.ExtensionContext) {
-  await activateAsync(context).catch(e => console.error(e))
-}
-
-export async function activateAsync(context: vscode.ExtensionContext) {
   const addDisposable = mkAddDisposable(context)
 
   const status = addDisposable(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left))
