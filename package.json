@@ -14,7 +14,7 @@
   },
   "main": "./out/main.js",
   "activationEvents": [
-    "onLanguage:go"
+    "onStartupFinished"
   ],
   "icon": "images/icon.png",
   "contributes": {
