@@ -1,3 +1,5 @@
+const path = require('path')
+
 module.exports = {
   env: {
     browser: true,
@@ -15,11 +17,13 @@ module.exports = {
   parserOptions: {
     ecmaVersion: 'latest',
     sourceType: 'module',
-    project: ['tsconfig.json'],
+    // https://github.com/microsoft/vscode-eslint/issues/1170#issuecomment-811871985
+    project: [path.join(__dirname, 'tsconfig.json')],
   },
   plugins: ['@typescript-eslint'],
   rules: {
     '@typescript-eslint/no-unused-vars': 'off',
+    '@typescript-eslint/require-await': 'off',
   },
-  ignorePatterns: [".eslintrc.js", "tree-sitter-*"]
+  ignorePatterns: ['.eslintrc.js', 'tree-sitter-*'],
 }
