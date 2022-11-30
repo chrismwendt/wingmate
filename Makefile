@@ -2,7 +2,7 @@
 
 all: wingmate.vsix
 
-wingmate.vsix: FORCE
+wingmate.vsix: FORCE out/tree-sitter-go.wasm out/tree-sitter-sql.wasm
 	yarn --frozen-lockfile
 	yarn run esbuild ./src/main.ts --bundle --outfile=out/main.js --external:vscode --format=cjs --platform=node --sourcemap=inline --external:pg-native
 	cp node_modules/web-tree-sitter/tree-sitter.wasm out/tree-sitter.wasm
