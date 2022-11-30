@@ -32,6 +32,7 @@ import { Client, Connection } from 'pg'
 import _ from 'lodash'
 import canonicalize from 'canonicalize'
 import manifest from '../package.json'
+import fs from 'fs/promises'
 
 export async function activate(context: vscode.ExtensionContext) {
   const addDisposable = mkAddDisposable(context)
@@ -42,6 +43,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-unsafe-member-access
   const extensionPath = vscode.extensions.getExtension(`${manifest.publisher}.${manifest.name}`)!.extensionPath
+
+  const wingmateWasmFile = path.join(extensionPath, 'wingmate.wasm')
+
+  const apis = new BehaviorSubject<API>(await loadWingmate(wingmateWasmFile))
+
+  const abortWatch = new AbortController()
+  void catchShow(async () => {
+    for await (const _ of fs.watch(wingmateWasmFile, { persistent: false, signal: abortWatch.signal })) {
+      void catchShow(async () => {
+        apis.next(await loadWingmate(wingmateWasmFile))
+      })
+    }
+  })
+  addDisposable(() => abortWatch.abort())
 
   await Parser.init()
   const goParser = new Parser()
@@ -64,26 +79,33 @@ export async function activate(context: vscode.ExtensionContext) {
         })
   )
 
-  const legend = new vscode.SemanticTokensLegend(Object.values(TokenType))
+  const legend = new vscode.SemanticTokensLegend(Object.values(TokenType).map(t => t.toString()))
   addDisposable(
-    sinkss
+    combineLatest([sinkss, apis])
       .pipe(
-        switchMap(sinks => {
+        switchMap(([sinks, api]) => {
           const provider: vscode.DocumentSemanticTokensProvider = {
-            provideDocumentSemanticTokens(document: vscode.TextDocument): vscode.ProviderResult<vscode.SemanticTokens> {
-              const tokensBuilder = new vscode.SemanticTokensBuilder(legend)
+            provideDocumentSemanticTokens: (
+              document: vscode.TextDocument
+            ): vscode.ProviderResult<vscode.SemanticTokens> =>
+              catchShowRethrow(async () => {
+                const tokensBuilder = new vscode.SemanticTokensBuilder(legend)
 
-              for (const { node: sqlNode, offset } of allNodesInSqlStrings(document, goParser, sqlParser, sinks)) {
-                const tokenType = nodeToTokenType(sqlNode)
-                if (tokenType) {
-                  for (const lineRange of singleLineRanges(nodeAtOffsetToRange(document, sqlNode, offset))) {
-                    tokensBuilder.push(lineRange, tokenType, [])
+                for (const { text, offset: strOffset } of allSqlStringsInGo(document, goParser, sinks)) {
+                  for (const [offset, len, ty] of api.tokenize(text)) {
+                    for (const lineRange of singleLineRanges(
+                      new vscode.Range(
+                        document.positionAt(strOffset + offset),
+                        document.positionAt(strOffset + offset + len)
+                      )
+                    )) {
+                      tokensBuilder.push(lineRange, ty, [])
+                    }
                   }
                 }
-              }
 
-              return tokensBuilder.build()
-            },
+                return tokensBuilder.build()
+              }),
           }
 
           return new Observable(() => {
@@ -460,7 +482,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const client = clients.value
 
-      ctch(async () => {
+      await catchShow(async () => {
         let argCount = 0
         const q = /%s/.test(str.node.text)
           ? str.node.text.replaceAll(/%s/g, () => '$' + (++argCount).toString())
@@ -613,18 +635,6 @@ enum TokenType {
   var = 'sqlvar',
 }
 
-const nodeToTokenType = (node: SyntaxNode): TokenType | undefined => {
-  if (/^keyword/.test(node.type)) return TokenType.keyword
-  else if (node.type === 'literal' && /^('|")/.test(node.text)) return TokenType.string
-  else if (node.type === 'literal' && /^[0-9]/.test(node.text)) return TokenType.number
-  else if (node.type === 'all_fields') return TokenType.asterisk
-  else if (node.type === 'comment') return TokenType.comment
-  else if (node.type === 'identifier') return TokenType.identifier
-  else if (/^[`~!@#$%^&*()\-_=+\\|/?,<.>;:]+$/.test(node.type)) return TokenType.operator
-  else if (node.type === 'var') return TokenType.var
-  else return undefined
-}
-
 const walk = (root: SyntaxNode, f: (node: SyntaxNode) => 'bail' | void): void => {
   const recur = (node?: SyntaxNode, depth = 0): void => {
     if (!node) return
@@ -738,6 +748,38 @@ const allSqlStrings = (
     const str = goStr.text.slice(1, -1)
     const sqlRoot = sqlParser.parse(str).rootNode
     ret.push({ node: sqlRoot, offset: goStr.startIndex + 1 })
+  })
+
+  return ret
+}
+
+const allSqlStringsInGo = (
+  document: vscode.TextDocument,
+  goParser: Parser,
+  sinks: Sink[]
+): { text: string; offset: number }[] => {
+  const ret: { text: string; offset: number }[] = []
+
+  const goRoot = goParser.parse(document.getText()).rootNode
+
+  walk(goRoot, goNode => {
+    if (goNode.type !== 'call_expression') {
+      return
+    }
+    const sink = sinks.find(sink => goNode.childForFieldName('function')?.text?.endsWith(sink.fn))
+    if (!sink) {
+      return
+    }
+    const argument_list = goNode.childForFieldName('arguments')
+    if (argument_list?.type !== 'argument_list') {
+      return
+    }
+    const arg = argument_list.namedChildren[sink.arg]
+    const goStr = isString(arg) ? arg : j2d(arg)
+    if (!goStr) {
+      return
+    }
+    ret.push({ text: goStr.text.slice(1, -1), offset: goStr.startIndex + 1 })
   })
 
   return ret
@@ -982,22 +1024,68 @@ type json = string | number | boolean | null | json[] | { [key: string]: json }
 
 const settingsCmdLink = `workbench.action.openSettings?${encodeURIComponent(JSON.stringify('wingmate'))}`
 
-const ctch = (f: () => Promise<unknown>): void => {
-  f().catch(async e => {
-    if (typeof e === 'string') {
-      await vscode.window.showErrorMessage(e)
-    } else if (e instanceof Error) {
-      await vscode.window.showErrorMessage(e.toString())
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    } else if (e && typeof e === 'object' && 'toString' in e && typeof e.toString === 'function') {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-      await vscode.window.showErrorMessage(e.toString())
-    } else if (e) {
-      await vscode.window.showErrorMessage(JSON.stringify(e))
-    } else {
-      await vscode.window.showErrorMessage('An unknown error occurred.')
-    }
-  })
+const showError = (e: unknown) => {
+  if (typeof e === 'string') {
+    void vscode.window.showErrorMessage(e)
+  } else if (e instanceof Error) {
+    void vscode.window.showErrorMessage(e.toString())
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+  } else if (e && typeof e === 'object' && 'toString' in e && typeof e.toString === 'function') {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+    void vscode.window.showErrorMessage(e.toString())
+  } else if (e) {
+    void vscode.window.showErrorMessage(JSON.stringify(e))
+  } else {
+    void vscode.window.showErrorMessage('An unknown error occurred.')
+  }
 }
 
+const catchShow = async <Ret>(f: () => Promise<Ret>): Promise<Ret | void> => f().catch(showError)
+
+const catchShowRethrow = async <Ret>(f: () => Promise<Ret>): Promise<Ret> =>
+  f().catch(e => {
+    void showError(e)
+    throw e
+  })
+
 const countMatches = (str: string, re: RegExp): number => (str.match(re) ?? []).length
+
+type API = {
+  /** Returns an array of triplets: (offset, length, type) */
+  tokenize: (code: string) => [number, number, string][]
+}
+
+const loadWingmate = async (wasmFile: string): Promise<API> => {
+  const module = await WebAssembly.compile(await fs.readFile(wasmFile))
+  const instance = await WebAssembly.instantiate(module)
+  const memory = instance.exports.memory
+  const malloc = instance.exports.malloc
+  const free = instance.exports.free
+  const call = instance.exports.call
+
+  if (!(memory instanceof WebAssembly.Memory)) throw new Error('wasm module is missing memory')
+  if (typeof malloc !== 'function') throw new Error('wasm module is missing malloc')
+  if (typeof free !== 'function') throw new Error('wasm module is missing free')
+  if (typeof call !== 'function') throw new Error('wasm module is missing call')
+
+  const api = <Arg, Ret>(name: string, arg: Arg): Ret => {
+    const argBytes = new TextEncoder().encode(JSON.stringify({ [name]: arg }))
+    const argLen = argBytes.length
+    const argPtr = malloc(argLen) as number
+    new Uint8Array(memory.buffer, argPtr + 4).set(argBytes)
+
+    const retPtr = call(argPtr) as number
+    free(argPtr)
+    const retLen = new Uint32Array(memory.buffer, retPtr)[0]
+    const retBytes = memory.buffer.slice(retPtr + 4, retPtr + 4 + retLen)
+    type DataOrError = { data: Ret } | { error: string }
+    const ret = JSON.parse(new TextDecoder().decode(retBytes)) as DataOrError
+    free(retPtr)
+    if ('error' in ret) throw new Error(ret.error)
+    return ret.data
+  }
+
+  return {
+    tokenize: code => api('tokenize', code),
+  }
+}

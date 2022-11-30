@@ -2,10 +2,11 @@
 
 all: wingmate.vsix
 
-wingmate.vsix: package.json yarn.lock LICENSE README.md .vscodeignore out/tree-sitter-go.wasm out/tree-sitter-sql.wasm tsconfig.json src/main.ts images/icon.png
+wingmate.vsix: FORCE
 	yarn --frozen-lockfile
 	yarn run esbuild ./src/main.ts --bundle --outfile=out/main.js --external:vscode --format=cjs --platform=node --sourcemap=inline --external:pg-native
 	cp node_modules/web-tree-sitter/tree-sitter.wasm out/tree-sitter.wasm
+	bash build-wingmate-wasm.sh
 	yarn run vsce package --yarn --out wingmate.vsix
 
 out/tree-sitter-go.wasm: tree-sitter-go/grammar.js node_modules/tree-sitter-cli/package.json
@@ -17,3 +18,5 @@ out/tree-sitter-sql.wasm: tree-sitter-sql/grammar.js node_modules/tree-sitter-cl
 	cd tree-sitter-sql && ../node_modules/.bin/tree-sitter generate
 	cd tree-sitter-sql && ../node_modules/.bin/tree-sitter build-wasm --docker
 	mv tree-sitter-sql/tree-sitter-sql.wasm out
+
+FORCE:

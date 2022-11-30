@@ -3,3 +3,5 @@ node_modules
 yarn-error.log
 sandbox
 wingmate.vsix
+wingmate.wasm
+build-wingmate-wasm.sh
